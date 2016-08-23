@@ -15,7 +15,7 @@ import_types_from "orb_slam2Types.hpp"
 # conventions, a common use-case would be:
 # import_types_from "orb_slam2/CustomType.hpp"
 
-using_library "orb_slam2"
+using_library "ORB_SLAM2"
 using_library "frame_helper"
 
 # If this project uses data types that are defined in other oroGen projects,
@@ -89,6 +89,15 @@ task_context "Task" do
     #******************************
     output_port('pose_samples_out', '/base/samples/RigidBodyState').
         doc 'Corrected estimated robot pose from the SLAM in sensor_frame.'
+
+    #******************************
+    #******* Debug Ports **********
+    #******************************
+    property('output_debug', 'bool', false).
+        doc 'Set to true if output debug information is desirable.'
+
+    output_port("frame_samples_out",  ro_ptr('base::samples::frame::Frame')).
+        doc 'Image frame with correspondences tracked features.'
 
     port_driven
 
