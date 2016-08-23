@@ -1,0 +1,15 @@
+<package>
+  <description brief="Rock task for the ORB-SLAM2">
+      Rock task for the ORB-SLAM2 implemented by Raul Mur-Artal (Uni. Zaragoza -
+      Spain).  ORB-SLAM2 is a real-time SLAM library for Monocular, Stereo and
+      RGB-D cameras that computes the camera trajectory and a sparse 3D
+      reconstruction.
+  </description>
+  <author>Javier Hidalgo Carrio/javier.hidalgo_carrio@dfki.de</author>
+  <license>GPLv3</license>
+  <url>https://github.com/raulmur/ORB_SLAM2</url>
+  <depend package="base/cmake" />
+  <depend package="base/orogen/types" />
+  <depend package="drivers/orogen/transformer" />
+  <depend package="slam/orb_slam2" />
+</package>
