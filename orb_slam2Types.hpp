@@ -8,7 +8,14 @@
  * which case you do not need this file
  */
 
-namespace orb_slam2 {
+namespace orb_slam2
+{
+    // Input sensor
+    enum eSensor{
+        MONOCULAR=0,
+        STEREO=1,
+        RGBD=2
+    };
 }
 
 #endif
