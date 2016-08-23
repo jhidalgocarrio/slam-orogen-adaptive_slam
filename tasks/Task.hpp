@@ -12,8 +12,13 @@
 #include <pangolin/pangolin.h>
 #include <iomanip>
 
+/** FrameHelper libraries **/
+#include <frame_helper/FrameHelper.h> /** Rock lib for manipulate frames **/
+#include <frame_helper/FrameHelperTypes.h> /** Types for FrameHelper **/
+
 /** Boost **/
 #include <boost/shared_ptr.hpp> /** shared pointers **/
+#include <boost/math/special_functions/round.hpp> // to round a number in standard C++ < 11
 
 namespace orb_slam2{
 
@@ -38,7 +43,13 @@ namespace orb_slam2{
     {
     friend class TaskBase;
 
-     protected:
+    protected:
+
+        /**************************/
+        /*** Property Variables ***/
+        /**************************/
+        //Intrinsic and extrinsic parameters for the pinhole camera model
+        frame_helper::StereoCalibration cameracalib;
 
         /******************************************/
         /*** General Internal Storage Variables ***/
@@ -46,6 +57,13 @@ namespace orb_slam2{
 
         // Create SLAM system. It initializes all system threads and gets ready to process frames.
         boost::shared_ptr< ::ORB_SLAM2::System>  slam;
+
+        unsigned short computing_counts, left_computing_idx, right_computing_idx; //integer to control the period
+        int frame_idx; // incremental stereo pair index
+
+        frame_helper::FrameHelper frameHelperLeft, frameHelperRight; /** Frame helper **/
+
+        base::samples::frame::FramePair frame_pair; /** Left and right images **/
 
 
     protected:
