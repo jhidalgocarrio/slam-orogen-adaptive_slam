@@ -2,6 +2,15 @@
 
 #include "Task.hpp"
 
+#define DEBUG_PRINTS 1
+
+#ifndef D2R
+#define D2R M_PI/180.00 /** Convert degree to radian **/
+#endif
+#ifndef R2D
+#define R2D 180.00/M_PI /** Convert radian to degree **/
+#endif
+
 using namespace orb_slam2;
 
 Task::Task(std::string const& name)
@@ -20,13 +29,13 @@ Task::~Task()
 
 void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::base::samples::RigidBodyState &delta_pose_samples_sample)
 {
-    throw std::runtime_error("Transformer callback for delta_pose_samples not implemented");
+
 }
 
 void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample)
 {
     #ifdef DEBUG_PRINTS
-    std::cout << "[VISUAL_STEREO LEFT_FRAME] Frame arrived at: " <<left_frame_sample->time.toString()<< std::endl;
+    std::cout << "[ORB_SLAM2 LEFT_FRAME] Frame arrived at: " <<left_frame_sample->time.toString()<< std::endl;
     #endif
 
     /** The image need to be in gray scale and undistorted **/
@@ -45,11 +54,13 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
         frame_pair.time = frame_pair.first.time;
 
         #ifdef DEBUG_PRINTS
-        std::cout<< "[VISUAL_STEREO LEFT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
+        std::cout<< "[ORB_SLAM2 LEFT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
 
         /** Process the images with ORB_SLAM2 **/
         this->process(frame_pair.first, frame_pair.second, frame_pair.time);
+
+
 
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
@@ -59,7 +70,7 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
 void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &right_frame_sample)
 {
     #ifdef DEBUG_PRINTS
-    std::cout<< "[VISUAL_STEREO RIGHT_FRAME] Frame arrived at: " <<right_frame_sample->time.toString()<<std::endl;
+    std::cout<< "[ORB_SLAM2 RIGHT_FRAME] Frame arrived at: " <<right_frame_sample->time.toString()<<std::endl;
     #endif
 
     /** Correct distortion in image right **/
@@ -78,7 +89,7 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
         frame_pair.time = frame_pair.second.time;
 
         #ifdef DEBUG_PRINTS
-        std::cout<< "[VISUAL_STEREO RIGHT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
+        std::cout<< "[ORB_SLAM2 RIGHT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
 
         /** Process the images with ORB_SLAM2 **/
@@ -101,22 +112,39 @@ bool Task::configureHook()
     /** Frame index **/
     this->frame_idx = 0;
 
+    /** Read the camera calibration parameters **/
+    this->cameracalib = _calib_parameters.value();
+
     /** Frame Helper **/
     this->frameHelperLeft.setCalibrationParameter(cameracalib.camLeft);
     this->frameHelperRight.setCalibrationParameter(cameracalib.camRight);
 
+    /** Initialize output frame **/
+    ::base::samples::frame::Frame *outframe = new ::base::samples::frame::Frame();
+    this->frame_out.reset(outframe);
+    outframe = NULL;
+
+    /** Optimized Output port **/
+    this->slam_pose_out.invalidate();
+    this->slam_pose_out.sourceFrame = _slam_localization_source_frame.value();
+
+    /** Relative Frame to port out the SAM pose samples **/
+    this->slam_pose_out.targetFrame = _world_frame.value();
+
+    RTT::log(RTT::Warning)<<"[ORB_SLAM2 TASK] DESIRED TARGET FRAME IS: "<<this->slam_pose_out.targetFrame<<RTT::endlog();
+
     /** Initialize the slam object **/
-    this->slam.reset(new ORB_SLAM2::System(_orb_vocabulary.get(), _orb_calibration.get(), ORB_SLAM2::System::STEREO,true));
+    this->slam.reset(new ORB_SLAM2::System(_orb_vocabulary.get(), _orb_calibration.get(), ORB_SLAM2::System::STEREO, false));
 
     /** Check task property parameters **/
     if (_left_frame_period.value() != _right_frame_period.value())
     {
-        throw std::runtime_error("[VISUAL_STEREO] Input port period in Left and Right images must be equal!");
+        throw std::runtime_error("[ORB_SLAM2] Input port period in Left and Right images must be equal!");
     }
 
     if (_desired_period.value() < _left_frame_period.value())
     {
-        throw std::runtime_error("[VISUAL_STEREO] Desired period cannot be smaller than input ports period!");
+        throw std::runtime_error("[ORB_SLAM2] Desired period cannot be smaller than input ports period!");
     }
     else if (_desired_period.value() == 0.00)
     {
@@ -129,7 +157,7 @@ bool Task::configureHook()
         _desired_period.value() = this->computing_counts * _left_frame_period.value();
     }
 
-    RTT::log(RTT::Warning)<<"[VISUAL_STEREO] Actual Computing Period: "<<_desired_period.value()<<" [seconds]"<<RTT::endlog();
+    RTT::log(RTT::Warning)<<"[ORB_SLAM2] Actual Computing Period: "<<_desired_period.value()<<" [seconds]"<<RTT::endlog();
 
     this->left_computing_idx = this->right_computing_idx = 0;
 
@@ -171,10 +199,68 @@ void Task::cleanupHook()
 
 void Task::process(const base::samples::frame::Frame &frame_left,
                 const base::samples::frame::Frame &frame_right,
-                const base::Time &time)
+                const base::Time &timestamp)
 {
     /** Convert Images to opencv **/
     cv::Mat img_l = frameHelperLeft.convertToCvMat(frame_left);
     cv::Mat img_r = frameHelperRight.convertToCvMat(frame_right);
+
+    this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
+
+    /** Left color image **/
+    if (_output_debug.get())
+    {
+        /** Get frame with information from ORB_SLAM **/
+        cv::Mat img_out = this->slam->mpFrameDrawer->DrawFrame();
+
+        /** Convert to Frame **/
+        ::base::samples::frame::Frame *frame_ptr = this->frame_out.write_access();
+        this->frameHelperLeft.copyMatToFrame(img_out, *frame_ptr);
+
+        /** Out port the image **/
+        frame_ptr->time = this->frame_pair.time;
+        this->frame_out.reset(frame_ptr);
+        _frame_samples_out.write(this->frame_out);
+    }
+
+    /** Get the transformation Tworld_navigation **/
+    Eigen::Affine3d tf_world_nav; /** Transformer transformation **/
+    /** Get the transformation Tworld_navigation (navigation is body_0) **/
+    if (_navigation_frame.value().compare(_world_frame.value()) == 0)
+    {
+        tf_world_nav.setIdentity();
+    }
+    else if (!_navigation2world.get(timestamp, tf_world_nav, false))
+    {
+        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR]  No transformation provided."<<RTT::endlog();
+       return;
+    }
+
+    Eigen::Affine3d tf_body_sensor; /** Transformer transformation **/
+    /** Get the transformation Tbody_sensor **/
+    if (_sensor_frame.value().compare(_body_frame.value()) == 0)
+    {
+        tf_body_sensor.setIdentity();
+    }
+    else if (!_sensor2body.get(timestamp, tf_body_sensor, false))
+    {
+        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR] No transformation provided."<<RTT::endlog();
+       return;
+    }
+
+    /** Get the camera pose from ORB_SLAM2 **/
+    g2o::SE3Quat se3_nav_sensor = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->mCurrentFrame.mTcw).inverse();
+
+    /** SE3 to Affine3d **/
+    Eigen::Affine3d tf_k_1_k(se3_nav_sensor.rotation());
+    tf_k_1_k.translation() = se3_nav_sensor.translation();
+
+    /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
+    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * tf_k_1_k * tf_body_sensor.inverse();
+
+    /** Out port the last slam pose **/
+    this->slam_pose_out.time = timestamp;
+    this->slam_pose_out.setTransform(tf_world_body);
+    _pose_samples_out.write(this->slam_pose_out);
 
 }

@@ -9,7 +9,6 @@
 #include <orb_slam2/System.h>
 #include <orb_slam2/Converter.h>
 #include <thread>
-#include <pangolin/pangolin.h>
 #include <iomanip>
 
 /** FrameHelper libraries **/
@@ -20,7 +19,8 @@
 #include <boost/shared_ptr.hpp> /** shared pointers **/
 #include <boost/math/special_functions/round.hpp> // to round a number in standard C++ < 11
 
-namespace orb_slam2{
+namespace orb_slam2
+{
 
     /*! \class Task
      * \brief The task context provides and requires services. It uses an ExecutionEngine to perform its functions.
@@ -64,6 +64,12 @@ namespace orb_slam2{
         frame_helper::FrameHelper frameHelperLeft, frameHelperRight; /** Frame helper **/
 
         base::samples::frame::FramePair frame_pair; /** Left and right images **/
+
+        /***************************/
+        /** Output Port Variables **/
+        /***************************/
+        base::samples::RigidBodyState slam_pose_out;
+        RTT::extras::ReadOnlyPointer<base::samples::frame::Frame> frame_out; /** Debug intra frame image **/
 
 
     protected:
@@ -154,7 +160,7 @@ namespace orb_slam2{
          * */
         void process(const base::samples::frame::Frame &frame_left,
                 const base::samples::frame::Frame &frame_right,
-                const base::Time &time);
+                const base::Time &timestamp);
     };
 }
 
