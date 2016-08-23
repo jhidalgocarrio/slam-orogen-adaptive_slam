@@ -149,6 +149,12 @@ namespace orb_slam2{
          * before calling start() again.
          */
         void cleanupHook();
+
+        /** @brief Process the images
+         * */
+        void process(const base::samples::frame::Frame &frame_left,
+                const base::samples::frame::Frame &frame_right,
+                const base::Time &time);
     };
 }
 

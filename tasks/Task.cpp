@@ -48,9 +48,11 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
         std::cout<< "[VISUAL_STEREO LEFT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
 
+        /** Process the images with ORB_SLAM2 **/
+        this->process(frame_pair.first, frame_pair.second, frame_pair.time);
+
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
-
     }
 }
 
@@ -78,6 +80,9 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
         #ifdef DEBUG_PRINTS
         std::cout<< "[VISUAL_STEREO RIGHT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
+
+        /** Process the images with ORB_SLAM2 **/
+        this->process(frame_pair.first, frame_pair.second, frame_pair.time);
 
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
@@ -162,4 +167,14 @@ void Task::cleanupHook()
 
     /** Reset ORB_SLAM2 **/
     this->slam.reset();
+}
+
+void Task::process(const base::samples::frame::Frame &frame_left,
+                const base::samples::frame::Frame &frame_right,
+                const base::Time &time)
+{
+    /** Convert Images to opencv **/
+    cv::Mat img_l = frameHelperLeft.convertToCvMat(frame_left);
+    cv::Mat img_r = frameHelperRight.convertToCvMat(frame_right);
+
 }
