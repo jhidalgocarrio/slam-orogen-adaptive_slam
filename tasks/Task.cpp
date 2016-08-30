@@ -2,7 +2,7 @@
 
 #include "Task.hpp"
 
-#define DEBUG_PRINTS 1
+//#define DEBUG_PRINTS 1
 
 #ifndef D2R
 #define D2R M_PI/180.00 /** Convert degree to radian **/
@@ -29,6 +29,29 @@ Task::~Task()
 
 void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::base::samples::RigidBodyState &delta_pose_samples_sample)
 {
+
+    Eigen::Affine3d tf_body_sensor; /** Transformer transformation **/
+    /** Get the transformation Tbody_sensor **/
+    if (_sensor_frame.value().compare(_body_frame.value()) == 0)
+    {
+        tf_body_sensor.setIdentity();
+    }
+    else if (!_sensor2body.get(ts, tf_body_sensor, false))
+    {
+        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR] No transformation provided."<<RTT::endlog();
+       return;
+    }
+
+    /** Set to identity if it is not initialized **/
+    if (!base::isnotnan(tf_sensor_sensor.matrix()))
+    {
+        tf_sensor_sensor.setIdentity();
+    }
+
+    std::cout << "[ORB_SLAM2 DELTA_POSE] Delta pose arrived at: " <<delta_pose_samples_sample.time.toString()<< std::endl;
+    /** Accumulate the relative sensor to sensor transformation **/
+    Eigen::Affine3d tf_body_body = delta_pose_samples_sample.getTransform();
+    Eigen::Affine3d tf_sensor_sensor = tf_sensor_sensor * (tf_body_sensor.inverse() * tf_body_body * tf_body_sensor);
 
 }
 
@@ -124,6 +147,9 @@ bool Task::configureHook()
     this->frame_out.reset(outframe);
     outframe = NULL;
 
+    /** Set Tsensor(k-1)_sensor to Nan **/
+    tf_sensor_sensor.matrix()= Eigen::Matrix<double, 4, 4>::Zero() * base::NaN<double>();
+
     /** Optimized Output port **/
     this->slam_pose_out.invalidate();
     this->slam_pose_out.sourceFrame = _slam_localization_source_frame.value();
@@ -205,7 +231,22 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     cv::Mat img_l = frameHelperLeft.convertToCvMat(frame_left);
     cv::Mat img_r = frameHelperRight.convertToCvMat(frame_right);
 
-    this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
+    /** Check whether there is delta pose in camera frame from motion model **/
+    if (base::isnotnan(tf_sensor_sensor.matrix()))
+    {
+        std::cout<<"[ORB_SLAM2 PROCESS] TF_SENSOR_SENSOR:\n"<< tf_sensor_sensor.matrix() <<"\n";
+
+        /** ORB_SLAM2 with motion model information **/
+        this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
+
+        /** Reset the Tsensor(k-1)_sensor(k) **/
+        tf_sensor_sensor.setIdentity();
+    }
+    else
+    {
+        /** ORB_SLAM2 **/
+        this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
+    }
 
     /** Left color image **/
     if (_output_debug.get())

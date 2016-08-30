@@ -65,6 +65,8 @@ namespace orb_slam2
 
         base::samples::frame::FramePair frame_pair; /** Left and right images **/
 
+        Eigen::Affine3d tf_sensor_sensor; // Relative camera transformations
+
         /***************************/
         /** Output Port Variables **/
         /***************************/
