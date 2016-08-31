@@ -43,15 +43,14 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
     }
 
     /** Set to identity if it is not initialized **/
-    if (!base::isnotnan(tf_sensor_sensor.matrix()))
+    if (!base::isnotnan(this->tf_odo_sensor_sensor_1.matrix()))
     {
-        tf_sensor_sensor.setIdentity();
+        this->tf_odo_sensor_sensor_1.setIdentity();
     }
 
-    std::cout << "[ORB_SLAM2 DELTA_POSE] Delta pose arrived at: " <<delta_pose_samples_sample.time.toString()<< std::endl;
-    /** Accumulate the relative sensor to sensor transformation **/
+    /** Accumulate the relative sensor to sensor transformation Tsensor_sensor(k-1) **/
     Eigen::Affine3d tf_body_body = delta_pose_samples_sample.getTransform();
-    Eigen::Affine3d tf_sensor_sensor = tf_sensor_sensor * (tf_body_sensor.inverse() * tf_body_body * tf_body_sensor);
+    this->tf_odo_sensor_sensor_1 = this->tf_odo_sensor_sensor_1 * (tf_body_sensor.inverse() * tf_body_body.inverse() * tf_body_sensor);
 
 }
 
@@ -147,8 +146,11 @@ bool Task::configureHook()
     this->frame_out.reset(outframe);
     outframe = NULL;
 
-    /** Set Tsensor(k-1)_sensor to Nan **/
-    tf_sensor_sensor.matrix()= Eigen::Matrix<double, 4, 4>::Zero() * base::NaN<double>();
+    /** Set Tsensor_sensor(k-1) from odometry to Nan **/
+    this->tf_odo_sensor_sensor_1.matrix()= Eigen::Matrix<double, 4, 4>::Zero() * base::NaN<double>();
+
+    /** Set Tsensor(k-1)_sensor from ORB_SLAM2  to Identity*/
+    this->tf_orb_sensor_1_sensor.setIdentity();
 
     /** Optimized Output port **/
     this->slam_pose_out.invalidate();
@@ -160,7 +162,7 @@ bool Task::configureHook()
     RTT::log(RTT::Warning)<<"[ORB_SLAM2 TASK] DESIRED TARGET FRAME IS: "<<this->slam_pose_out.targetFrame<<RTT::endlog();
 
     /** Initialize the slam object **/
-    this->slam.reset(new ORB_SLAM2::System(_orb_vocabulary.get(), _orb_calibration.get(), ORB_SLAM2::System::STEREO, false));
+    this->slam.reset(new ORB_SLAM2::System(_orb_vocabulary.get(), _orb_calibration.get(), ORB_SLAM2::System::STEREO, true));
 
     /** Check task property parameters **/
     if (_left_frame_period.value() != _right_frame_period.value())
@@ -232,26 +234,25 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     cv::Mat img_r = frameHelperRight.convertToCvMat(frame_right);
 
     /** Check whether there is delta pose in camera frame from motion model **/
-    if (base::isnotnan(tf_sensor_sensor.matrix()))
+    cv::Mat tf_motion_model;
+    if (base::isnotnan(this->tf_odo_sensor_sensor_1.matrix()))
     {
-        std::cout<<"[ORB_SLAM2 PROCESS] TF_SENSOR_SENSOR:\n"<< tf_sensor_sensor.matrix() <<"\n";
+        //std::cout<<"[ORB_SLAM2 PROCESS] TF_ODO_SENSOR_SENSOR_1:\n"<< this->tf_odo_sensor_sensor_1.matrix() <<"\n";
 
         /** ORB_SLAM2 with motion model information **/
-        this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
+        tf_motion_model = ORB_SLAM2::Converter::toCvMat(this->tf_odo_sensor_sensor_1.matrix());
 
-        /** Reset the Tsensor(k-1)_sensor(k) **/
-        tf_sensor_sensor.setIdentity();
+        /** Reset the Tsensor(k)_sensor(k-1) **/
+        this->tf_odo_sensor_sensor_1.setIdentity();
     }
-    else
-    {
-        /** ORB_SLAM2 **/
-        this->slam->TrackStereo(img_l,img_r, timestamp.toSeconds());
-    }
+
+    /** ORB_SLAM2 **/
+    this->slam->TrackStereo(img_l, img_r, timestamp.toSeconds(), tf_motion_model);
 
     /** Left color image **/
     if (_output_debug.get())
     {
-        /** Get frame with information from ORB_SLAM **/
+        /** Get frame with information from ORB_SLAM2 **/
         cv::Mat img_out = this->slam->mpFrameDrawer->DrawFrame();
 
         /** Convert to Frame **/
@@ -290,18 +291,20 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
 
     /** Get the camera pose from ORB_SLAM2 **/
-    g2o::SE3Quat se3_nav_sensor = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->mCurrentFrame.mTcw).inverse();
+    if (!this->slam->mpTracker->mCurrentFrame.mTcw.empty())
+    {
+        g2o::SE3Quat se3_nav_sensor = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->mCurrentFrame.mTcw).inverse();
 
-    /** SE3 to Affine3d **/
-    Eigen::Affine3d tf_k_1_k(se3_nav_sensor.rotation());
-    tf_k_1_k.translation() = se3_nav_sensor.translation();
+        /** SE3 to Affine3d **/
+       this->tf_orb_sensor_1_sensor = se3_nav_sensor.rotation();
+       this->tf_orb_sensor_1_sensor.translation() = se3_nav_sensor.translation();
+    }
 
     /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
-    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * tf_k_1_k * tf_body_sensor.inverse();
+    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_orb_sensor_1_sensor * tf_body_sensor.inverse();
 
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
     this->slam_pose_out.setTransform(tf_world_body);
     _pose_samples_out.write(this->slam_pose_out);
-
 }

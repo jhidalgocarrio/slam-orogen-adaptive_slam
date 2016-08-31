@@ -56,7 +56,7 @@ namespace orb_slam2
         /******************************************/
 
         // Create SLAM system. It initializes all system threads and gets ready to process frames.
-        boost::shared_ptr< ::ORB_SLAM2::System>  slam;
+        boost::shared_ptr< ::ORB_SLAM2::System> slam;
 
         unsigned short computing_counts, left_computing_idx, right_computing_idx; //integer to control the period
         int frame_idx; // incremental stereo pair index
@@ -65,7 +65,9 @@ namespace orb_slam2
 
         base::samples::frame::FramePair frame_pair; /** Left and right images **/
 
-        Eigen::Affine3d tf_sensor_sensor; // Relative camera transformations
+        Eigen::Affine3d tf_odo_sensor_sensor_1; // Relative camera transformations from delta_poses Tsensor(k)_sensor(k-1)
+
+        Eigen::Affine3d tf_orb_sensor_1_sensor; //Relative camera transformation from ORB_SLAM2 Tsensor(k-1)_sensor(k)
 
         /***************************/
         /** Output Port Variables **/
