@@ -44,7 +44,7 @@ task_context "Task" do
 
     property('slam_localization_source_frame', '/std/string').
         doc 'Frame of the slam localization (normally sensor frame or body frame)'+
-        'The slam localization target frame is taken from the world frame of the transformer.'
+            'The slam localization target frame is taken from the world frame of the transformer.'
 
     property("desired_period", "double").
         doc "Period to compute the image processing step in seconds. It cannot be higher than the input port period."+
