@@ -29,6 +29,9 @@ Task::~Task()
 
 void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::base::samples::RigidBodyState &delta_pose_samples_sample)
 {
+    #ifdef DEBUG_PRINTS
+    RTT::log(RTT::Warning)<<"[GP_ODOMETRY DELTA_POSE_SAMPLES] Received time-stamp: "<<delta_pose_samples_sample.time.toMicroseconds()<<RTT::endlog();
+    #endif
 
     Eigen::Affine3d tf_body_sensor; /** Transformer transformation **/
     /** Get the transformation Tbody_sensor **/
@@ -52,6 +55,15 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
     Eigen::Affine3d tf_body_body = delta_pose_samples_sample.getTransform();
     this->tf_odo_sensor_sensor_1 = this->tf_odo_sensor_sensor_1 * (tf_body_sensor.inverse() * tf_body_body.inverse() * tf_body_sensor);
 
+    /** Need to compute a key frame image **/
+    if (!this->flag_compute_keyframe)
+    {
+        this->flag_compute_keyframe = this->needKeyFrame(delta_pose_samples_sample);
+    }
+    else
+    {
+        std::cout<<"[ORB_SLAM2 DELTA_POSE_SAMPLES] FLAG IS ALREADY TRUE:\n";
+    }
 }
 
 void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample)
@@ -67,11 +79,11 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
     /** Increase the computing index **/
     this->left_computing_idx++;
 
-    /** If the difference in time is less than half of a period run the odometry **/
+    /** If the difference in time is less than half of a period run the tracking **/
     base::Time diffTime = frame_pair.first.time - frame_pair.second.time;
 
-    /** If the difference in time is less than half of a period run the odometry **/
-    if (diffTime.toSeconds() < (_left_frame_period/2.0) && (this->left_computing_idx >= this->computing_counts))
+    /** If the difference in time is less than half of a period run the tracking **/
+    if (diffTime.toSeconds() < (_left_frame_period/2.0) && (this->left_computing_idx >= this->computing_counts || this->flag_compute_keyframe))
     {
         frame_pair.time = frame_pair.first.time;
 
@@ -81,8 +93,6 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
 
         /** Process the images with ORB_SLAM2 **/
         this->process(frame_pair.first, frame_pair.second, frame_pair.time);
-
-
 
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
@@ -105,8 +115,8 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
     /** Check the time difference **/
     base::Time diffTime = frame_pair.second.time - frame_pair.first.time;
 
-    /** If the difference in time is less than half of a period run the odometry **/
-    if (diffTime.toSeconds() < (_right_frame_period/2.0) && (this->right_computing_idx >= this->computing_counts))
+    /** If the difference in time is less than half of a period run the tracking **/
+    if (diffTime.toSeconds() < (_right_frame_period/2.0) && (this->right_computing_idx >= this->computing_counts || this->flag_compute_keyframe))
     {
         frame_pair.time = frame_pair.second.time;
 
@@ -134,6 +144,9 @@ bool Task::configureHook()
     /** Frame index **/
     this->frame_idx = 0;
 
+    /** Initial need to compute a keyframe is true **/
+    this->flag_compute_keyframe = true;
+
     /** Read the camera calibration parameters **/
     this->cameracalib = _calib_parameters.value();
 
@@ -154,12 +167,19 @@ bool Task::configureHook()
 
     /** Optimized Output port **/
     this->slam_pose_out.invalidate();
-    this->slam_pose_out.sourceFrame = _slam_localization_source_frame.value();
+    this->slam_pose_out.sourceFrame = _pose_samples_out_source_frame.value();
 
     /** Relative Frame to port out the SAM pose samples **/
     this->slam_pose_out.targetFrame = _world_frame.value();
 
     RTT::log(RTT::Warning)<<"[ORB_SLAM2 TASK] DESIRED TARGET FRAME IS: "<<this->slam_pose_out.targetFrame<<RTT::endlog();
+
+    /* Initialize the key frame trajectory **/
+    this->keyframe_trajectory.clear();
+
+    /* Initialize the features map **/
+    this->features_map.points.clear();
+    this->features_map.colors.clear();
 
     /** Initialize the slam object **/
     this->slam.reset(new ORB_SLAM2::System(_orb_vocabulary.get(), _orb_calibration.get(), ORB_SLAM2::System::STEREO, true));
@@ -218,6 +238,12 @@ void Task::cleanupHook()
 {
     TaskBase::cleanupHook();
 
+    /** Save the trajectory in TUM format (quaternion + translation ) **/
+    this->slam->SaveTrajectoryTUM("orb_slam2_trajectory.txt");
+
+    /** Reset keyframe trajectory out port**/
+    this->keyframe_trajectory.clear();
+
     /** Stop ORB_SLAM2 all threads **/
     this->slam->Shutdown();
 
@@ -248,6 +274,9 @@ void Task::process(const base::samples::frame::Frame &frame_left,
 
     /** ORB_SLAM2 **/
     this->slam->TrackStereo(img_l, img_r, timestamp.toSeconds(), tf_motion_model);
+
+    /** Set insert key frame to false **/
+    this->flag_compute_keyframe = false;
 
     /** Left color image **/
     if (_output_debug.get())
@@ -307,4 +336,103 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     this->slam_pose_out.time = timestamp;
     this->slam_pose_out.setTransform(tf_world_body);
     _pose_samples_out.write(this->slam_pose_out);
+
+    /** Get the trajectory of key frames **/
+    this->getKeyFramesPose(this->keyframe_trajectory, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    _keyframe_trajectory_out.write(this->keyframe_trajectory);
+
+    /** Get the features map **/
+    this->getMapPointsPose(this->features_map, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    this->features_map.time = timestamp;
+    _features_map_out.write(this->features_map);
+}
+
+bool Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
+{
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
+
+    return (delta_pose_samples.cov_velocity.norm() > _velocity_residual_threshold.value());
+}
+
+void Task::getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory, const Eigen::Affine3d &tf)
+{
+    /** Clear trajectory **/
+    trajectory.clear();
+
+    /** Get the key frames and sort them by id **/
+    std::vector< ::ORB_SLAM2::KeyFrame* > vpKFs = this->slam->mpMap->GetAllKeyFrames();
+    std::sort(vpKFs.begin(),vpKFs.end(), ::ORB_SLAM2::KeyFrame::lId);
+
+    // Transform all keyframes so that the first keyframe is at the origin.
+    // After a loop closure the first keyframe might not be at the origin.
+    cv::Mat Two = vpKFs[0]->GetPoseInverse();
+
+    // Frame pose is stored relative to its reference keyframe (which is optimized by BA and pose graph).
+    // We need to get first the keyframe pose and then concatenate the relative transformation.
+    // Frames not localized (tracking failure) are not saved.
+
+    // For each frame we have a reference keyframe (lRit), the timestamp (lT) and a flag
+    // which is true when tracking failed (lbL).
+    std::list< ::ORB_SLAM2::KeyFrame*>::iterator lRit = this->slam->mpTracker->mlpReferences.begin();
+    std::list<double>::iterator lT = this->slam->mpTracker->mlFrameTimes.begin();
+    std::list<bool>::iterator lbL = this->slam->mpTracker->mlbLost.begin();
+    for(std::list<cv::Mat>::iterator lit=this->slam->mpTracker->mlRelativeFramePoses.begin(),
+        lend=this->slam->mpTracker->mlRelativeFramePoses.end();lit!=lend;lit++, lRit++, lT++, lbL++)
+    {
+        if(*lbL)
+            continue;
+
+        ::ORB_SLAM2::KeyFrame* pKF = *lRit;
+
+        cv::Mat Trw = cv::Mat::eye(4,4,CV_32F);
+
+        // If the reference keyframe was culled, traverse the spanning tree to get a suitable keyframe.
+        while(pKF->isBad())
+        {
+            Trw = Trw*pKF->mTcp;
+            pKF = pKF->GetParent();
+        }
+
+        Trw = Trw*pKF->GetPose()*Two;
+
+        cv::Mat Tcw = (*lit)*Trw;
+        cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+
+        /** ORB_SLAM2 quaternion is x, y, z, w and Eigen quaternion is w, x, y, z **/
+        std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+        ::base::Pose pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
+
+        /** Store the pose in the trajectory **/
+        trajectory.push_back(base::Waypoint(pose.position, pose.getYaw()+(M_PI/2.0), 0.0, 0.0));
+    }
+    return;
+}
+
+
+void Task::getMapPointsPose( ::base::samples::Pointcloud &points_map,  const Eigen::Affine3d &tf)
+{
+    /* Clean point cloud **/
+    points_map.points.clear();
+
+    const std::vector< ORB_SLAM2::MapPoint* > &vpMPs = this->slam->mpMap->GetAllMapPoints();
+    const std::vector< ORB_SLAM2::MapPoint*> &vpRefMPs = this->slam->mpMap->GetReferenceMapPoints();
+
+    std::set<ORB_SLAM2::MapPoint*> spRefMPs(vpRefMPs.begin(), vpRefMPs.end());
+
+    if(vpMPs.empty())
+        return;
+
+    for(size_t i=0, iend=vpMPs.size(); i<iend;i++)
+    {
+        if(vpMPs[i]->isBad() || spRefMPs.count(vpMPs[i]))
+            continue;
+        g2o::SE3Quat pos = ORB_SLAM2::Converter::toSE3Quat(vpMPs[i]->GetWorldPos());
+        Eigen::Affine3d tf_point; tf_point = pos.rotation();
+        tf_point.translation() = pos.translation();
+        points_map.points.push_back((tf * tf_point).translation());
+    }
+
+    return;
 }

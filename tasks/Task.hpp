@@ -48,6 +48,7 @@ namespace orb_slam2
         /**************************/
         /*** Property Variables ***/
         /**************************/
+
         //Intrinsic and extrinsic parameters for the pinhole camera model
         frame_helper::StereoCalibration cameracalib;
 
@@ -55,11 +56,17 @@ namespace orb_slam2
         /*** General Internal Storage Variables ***/
         /******************************************/
 
+        /** Flag to control the need to compute a key frame **/
+        bool flag_compute_keyframe;
+
         // Create SLAM system. It initializes all system threads and gets ready to process frames.
         boost::shared_ptr< ::ORB_SLAM2::System> slam;
 
-        unsigned short computing_counts, left_computing_idx, right_computing_idx; //integer to control the period
-        int frame_idx; // incremental stereo pair index
+        //integer to control the period
+        unsigned short computing_counts, left_computing_idx, right_computing_idx;
+
+        // incremental stereo pair index
+        int frame_idx; 
 
         frame_helper::FrameHelper frameHelperLeft, frameHelperRight; /** Frame helper **/
 
@@ -73,7 +80,13 @@ namespace orb_slam2
         /** Output Port Variables **/
         /***************************/
         base::samples::RigidBodyState slam_pose_out;
-        RTT::extras::ReadOnlyPointer<base::samples::frame::Frame> frame_out; /** Debug intra frame image **/
+        std::vector< ::base::Waypoint > keyframe_trajectory;
+
+        /** Debug intra frame image **/
+        RTT::extras::ReadOnlyPointer<base::samples::frame::Frame> frame_out;
+
+        /** Features map points **/
+        base::samples::Pointcloud features_map;
 
 
     protected:
@@ -165,6 +178,18 @@ namespace orb_slam2
         void process(const base::samples::frame::Frame &frame_left,
                 const base::samples::frame::Frame &frame_right,
                 const base::Time &timestamp);
+
+        /** @brief Calculates whether the computation of a keyframe is required
+         */
+        bool needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
+
+        /** @brief Get the Key Frames Pose wrt to the origin
+         */
+        void getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory,  const Eigen::Affine3d &tf);
+
+        /** @brief Get the Sparse map containing the feature points
+         */
+        void getMapPointsPose( ::base::samples::Pointcloud &points_map,  const Eigen::Affine3d &tf);
     };
 }
 

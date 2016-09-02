@@ -8,6 +8,8 @@
  * which case you do not need this file
  */
 
+#include <base/Time.hpp>
+
 namespace orb_slam2
 {
     // Input sensor
@@ -15,6 +17,14 @@ namespace orb_slam2
         MONOCULAR=0,
         STEREO=1,
         RGBD=2
+    };
+
+    /** Output port type **/
+    struct Information
+    {
+        base::Time time; //time-stamp
+        int number_relocations;
+        int number_loops;
     };
 }
 
