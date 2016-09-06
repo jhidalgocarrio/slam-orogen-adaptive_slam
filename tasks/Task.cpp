@@ -56,14 +56,8 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
     this->tf_odo_sensor_sensor_1 = this->tf_odo_sensor_sensor_1 * (tf_body_sensor.inverse() * tf_body_body.inverse() * tf_body_sensor);
 
     /** Need to compute a key frame image **/
-    if (!this->flag_compute_keyframe)
-    {
-        this->flag_compute_keyframe = this->needKeyFrame(delta_pose_samples_sample);
-    }
-    else
-    {
-        std::cout<<"[ORB_SLAM2 DELTA_POSE_SAMPLES] FLAG IS ALREADY TRUE:\n";
-    }
+    if ( this->slam->mpTracker->mState == ORB_SLAM2::Tracking::OK || this->slam->mpTracker->mState == ORB_SLAM2::Tracking::LOST)
+        this->needKeyFrame(delta_pose_samples_sample);
 }
 
 void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample)
@@ -83,7 +77,7 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
     base::Time diffTime = frame_pair.first.time - frame_pair.second.time;
 
     /** If the difference in time is less than half of a period run the tracking **/
-    if (diffTime.toSeconds() < (_left_frame_period/2.0) && (this->left_computing_idx >= this->computing_counts || this->flag_compute_keyframe))
+    if (diffTime.toSeconds() < (_left_frame_period/2.0) && (this->left_computing_idx >= this->computing_counts))
     {
         frame_pair.time = frame_pair.first.time;
 
@@ -116,7 +110,7 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
     base::Time diffTime = frame_pair.second.time - frame_pair.first.time;
 
     /** If the difference in time is less than half of a period run the tracking **/
-    if (diffTime.toSeconds() < (_right_frame_period/2.0) && (this->right_computing_idx >= this->computing_counts || this->flag_compute_keyframe))
+    if (diffTime.toSeconds() < (_right_frame_period/2.0) && (this->right_computing_idx >= this->computing_counts))
     {
         frame_pair.time = frame_pair.second.time;
 
@@ -145,7 +139,7 @@ bool Task::configureHook()
     this->frame_idx = 0;
 
     /** Initial need to compute a keyframe is true **/
-    this->flag_compute_keyframe = true;
+    this->flag_process_keyframe = true;
 
     /** Read the camera calibration parameters **/
     this->cameracalib = _calib_parameters.value();
@@ -169,13 +163,21 @@ bool Task::configureHook()
     this->slam_pose_out.invalidate();
     this->slam_pose_out.sourceFrame = _pose_samples_out_source_frame.value();
 
-    /** Relative Frame to port out the SAM pose samples **/
+    /** Relative Frame to port out the SLAM pose samples **/
     this->slam_pose_out.targetFrame = _world_frame.value();
 
     RTT::log(RTT::Warning)<<"[ORB_SLAM2 TASK] DESIRED TARGET FRAME IS: "<<this->slam_pose_out.targetFrame<<RTT::endlog();
 
+    /** Last keyframe Output port **/
+    this->keyframe_pose_out.invalidate();
+    this->keyframe_pose_out.sourceFrame = _keyframe_samples_out_source_frame.value();
+
+    /** Relative Frame to port out the SLAM pose samples **/
+    this->keyframe_pose_out.targetFrame = _world_frame.value();
+
     /* Initialize the key frame trajectory **/
-    this->keyframe_trajectory.clear();
+    this->keyframes_trajectory.clear();
+    this->allframes_trajectory.clear();
 
     /* Initialize the features map **/
     this->features_map.points.clear();
@@ -238,11 +240,15 @@ void Task::cleanupHook()
 {
     TaskBase::cleanupHook();
 
-    /** Save the trajectory in TUM format (quaternion + translation ) **/
-    this->slam->SaveTrajectoryTUM("orb_slam2_trajectory.txt");
+    /** Save the keyframes trajectory in text format (translation + heading) **/
+    this->saveKFTrajectoryText("orb_slam2_keyframes_trajectory.data");
+
+    /** Save the all frames trajectory in text format (translation + heading) **/
+    this->saveAllTrajectoryText("orb_slam2_allframes_trajectory.data");
 
     /** Reset keyframe trajectory out port**/
-    this->keyframe_trajectory.clear();
+    this->keyframes_trajectory.clear();
+    this->allframes_trajectory.clear();
 
     /** Stop ORB_SLAM2 all threads **/
     this->slam->Shutdown();
@@ -276,7 +282,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     this->slam->TrackStereo(img_l, img_r, timestamp.toSeconds(), tf_motion_model);
 
     /** Set insert key frame to false **/
-    this->flag_compute_keyframe = false;
+    this->flag_process_keyframe = true;
 
     /** Left color image **/
     if (_output_debug.get())
@@ -338,27 +344,73 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     _pose_samples_out.write(this->slam_pose_out);
 
     /** Get the trajectory of key frames **/
-    this->getKeyFramesPose(this->keyframe_trajectory, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
-    _keyframe_trajectory_out.write(this->keyframe_trajectory);
+    this->getFramesPose(this->keyframes_trajectory, this->allframes_trajectory, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    _keyframes_trajectory_out.write(this->keyframes_trajectory);
+    _allframes_trajectory_out.write(this->allframes_trajectory);
+
+    /** Out port the last keyframe pose **/
+    this->keyframe_pose_out.time = timestamp;
+    _keyframe_pose_samples_out.write(this->keyframe_pose_out);
 
     /** Get the features map **/
-    this->getMapPointsPose(this->features_map, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
-    this->features_map.time = timestamp;
-    _features_map_out.write(this->features_map);
+    //this->getMapPointsPose(this->features_map, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    //this->features_map.time = timestamp;
+    //_features_map_out.write(this->features_map);
+
+    /** Write in the slam information port **/
+    this->info.time = timestamp;
+    this->info.number_relocalizations = this->slam->mpTracker->number_relocalizations;
+    this->info.number_loops = this->slam->mpLoopCloser->number_loops;
+    this->info.fps = (1.0/_left_frame_period.value())/this->computing_counts;
+    _task_info_out.write(this->info);
 }
 
-bool Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
+void Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
 {
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] SUM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.sum() <<"\n";
+    double residual = delta_pose_samples.cov_velocity.norm();
+    unsigned short new_computing_counts;
 
-    return (delta_pose_samples.cov_velocity.norm() > _velocity_residual_threshold.value());
+    if (residual < _velocity_residual_threshold.value())
+    {
+        /** Smaller than threshold reduce the frequency **/
+        new_computing_counts = boost::math::iround(4.0 * _desired_period.value()/_left_frame_period.value());
+        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+    }
+    else if (residual > 2.0 * _velocity_residual_threshold.value())
+    {
+        /** Bigger than double the threshold reduce the frequency **/
+        new_computing_counts = boost::math::iround(0.3 * _desired_period.value()/_left_frame_period.value());
+        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+    }
+    else
+    {
+        new_computing_counts = boost::math::iround(_desired_period.value()/_left_frame_period.value());
+        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+    }
+
+    if (this->flag_process_keyframe)
+    {
+        /** KeyFrame has been processed **/
+        this->flag_process_keyframe = false;
+        this->computing_counts = new_computing_counts;
+        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
+    }
+    else if (new_computing_counts < this->computing_counts)
+    {
+        /** KeyFrame has been processed **/
+        this->computing_counts = new_computing_counts;
+        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, BECAUSE SMALLER!!\n";
+    }
+    return;
 }
 
-void Task::getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory, const Eigen::Affine3d &tf)
+void Task::getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::vector< ::base::Waypoint > &frames_trajectory, const Eigen::Affine3d &tf)
 {
     /** Clear trajectory **/
-    trajectory.clear();
+    kf_trajectory.clear();
 
     /** Get the key frames and sort them by id **/
     std::vector< ::ORB_SLAM2::KeyFrame* > vpKFs = this->slam->mpMap->GetAllKeyFrames();
@@ -368,10 +420,45 @@ void Task::getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory, const 
     // After a loop closure the first keyframe might not be at the origin.
     cv::Mat Two = vpKFs[0]->GetPoseInverse();
 
+    /********************************
+     * Store the last kayframe pose 
+    *********************************/
+    if (vpKFs.size() > 0)
+    {
+        cv::Mat Tcw = vpKFs[vpKFs.size()-1]->GetPose()*Two;
+        cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+
+        /** ORB_SLAM2 quaternion is x, y, z, w and Eigen quaternion is w, x, y, z **/
+        std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+        ::base::Pose pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
+
+        this->keyframe_pose_out.setTransform(pose.toTransform());
+    }
+
+    /*********************************
+    * Store the Keyframes trajectory
+    *********************************/
+    for(std::vector< ::ORB_SLAM2::KeyFrame* >::iterator it = vpKFs.begin(); it != vpKFs.end(); ++it)
+    {
+        /** Get the transformation world to keyframe **/
+        cv::Mat Tcw = (*it)->GetPose()*Two;
+        cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+
+        /** ORB_SLAM2 quaternion is x, y, z, w and Eigen quaternion is w, x, y, z **/
+        std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+        ::base::Pose pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
+
+        /** Store the pose in the trajectory **/
+        kf_trajectory.push_back(base::Waypoint(pose.position, pose.getYaw(), 0.0, 0.0));
+    }
+
     // Frame pose is stored relative to its reference keyframe (which is optimized by BA and pose graph).
     // We need to get first the keyframe pose and then concatenate the relative transformation.
     // Frames not localized (tracking failure) are not saved.
 
+    frames_trajectory.clear();
     // For each frame we have a reference keyframe (lRit), the timestamp (lT) and a flag
     // which is true when tracking failed (lbL).
     std::list< ::ORB_SLAM2::KeyFrame*>::iterator lRit = this->slam->mpTracker->mlpReferences.begin();
@@ -405,7 +492,7 @@ void Task::getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory, const 
         ::base::Pose pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
 
         /** Store the pose in the trajectory **/
-        trajectory.push_back(base::Waypoint(pose.position, pose.getYaw()+(M_PI/2.0), 0.0, 0.0));
+        frames_trajectory.push_back(base::Waypoint(pose.position, pose.getYaw(), 0.0, 0.0));
     }
     return;
 }
@@ -413,26 +500,77 @@ void Task::getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory, const 
 
 void Task::getMapPointsPose( ::base::samples::Pointcloud &points_map,  const Eigen::Affine3d &tf)
 {
-    /* Clean point cloud **/
+    /** Clean point cloud **/
     points_map.points.clear();
 
     const std::vector< ORB_SLAM2::MapPoint* > &vpMPs = this->slam->mpMap->GetAllMapPoints();
-    const std::vector< ORB_SLAM2::MapPoint*> &vpRefMPs = this->slam->mpMap->GetReferenceMapPoints();
+    const std::vector< ORB_SLAM2::MapPoint* > &vpRefMPs = this->slam->mpMap->GetReferenceMapPoints();
 
     std::set<ORB_SLAM2::MapPoint*> spRefMPs(vpRefMPs.begin(), vpRefMPs.end());
 
     if(vpMPs.empty())
         return;
 
-    for(size_t i=0, iend=vpMPs.size(); i<iend;i++)
+    //for(size_t i=0, iend=vpMPs.size(); i<iend;i++)
+    //{
+    //    if(vpMPs[i]->isBad() || spRefMPs.count(vpMPs[i]))
+    //        continue;
+    //    g2o::SE3Quat pos = ORB_SLAM2::Converter::toSE3Quat(vpMPs[i]->GetWorldPos());
+    //    Eigen::Affine3d tf_point; tf_point = pos.rotation();
+    //    tf_point.translation() = pos.translation();
+    //    points_map.points.push_back((tf * tf_point).translation());
+    //}
+
+    for(std::set<ORB_SLAM2::MapPoint*>::iterator sit=spRefMPs.begin(),
+            send=spRefMPs.end(); sit!=send; sit++)
     {
-        if(vpMPs[i]->isBad() || spRefMPs.count(vpMPs[i]))
+        if((*sit)->isBad())
             continue;
-        g2o::SE3Quat pos = ORB_SLAM2::Converter::toSE3Quat(vpMPs[i]->GetWorldPos());
+        g2o::SE3Quat pos = ORB_SLAM2::Converter::toSE3Quat((*sit)->GetWorldPos());
         Eigen::Affine3d tf_point; tf_point = pos.rotation();
         tf_point.translation() = pos.translation();
-        points_map.points.push_back((tf * tf_point).translation());
+        tf_point = tf * tf_point;
+        points_map.points.push_back(tf_point.translation());
     }
+
+    return;
+}
+void Task::saveKFTrajectoryText(const string &filename, const Eigen::Affine3d &tf)
+{
+    std::cout << std::endl << "Saving camera trajectory to " << filename << " ..." << std::endl;
+
+    std::ofstream f;
+    f.open(filename.c_str());
+    f << std::fixed;
+
+    for (std::vector< ::base::Waypoint >::iterator it = this->keyframes_trajectory.begin();
+            it != this->keyframes_trajectory.end(); ++it)
+    {
+        f << std::setprecision(9) << it->position[0] << " " << it->position[1] << " " << it->position[2] << " " << it->heading << std::endl;
+    }
+
+    f.close();
+    std::cout << std::endl << "trajectory saved!" << std::endl;
+
+    return;
+}
+
+void Task::saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &tf)
+{
+    std::cout << std::endl << "Saving camera trajectory to " << filename << " ..." << std::endl;
+
+    std::ofstream f;
+    f.open(filename.c_str());
+    f << std::fixed;
+
+    for (std::vector< ::base::Waypoint >::iterator it = this->allframes_trajectory.begin();
+            it != this->allframes_trajectory.end(); ++it)
+    {
+        f << std::setprecision(9) << it->position[0] << " " << it->position[1] << " " << it->position[2] << " " << it->heading << std::endl;
+    }
+
+    f.close();
+    std::cout << std::endl << "trajectory saved!" << std::endl;
 
     return;
 }

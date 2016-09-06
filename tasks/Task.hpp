@@ -56,8 +56,8 @@ namespace orb_slam2
         /*** General Internal Storage Variables ***/
         /******************************************/
 
-        /** Flag to control the need to compute a key frame **/
-        bool flag_compute_keyframe;
+        /** Flag to know when the key-frame has been processed **/
+        bool flag_process_keyframe;
 
         // Create SLAM system. It initializes all system threads and gets ready to process frames.
         boost::shared_ptr< ::ORB_SLAM2::System> slam;
@@ -79,8 +79,9 @@ namespace orb_slam2
         /***************************/
         /** Output Port Variables **/
         /***************************/
-        base::samples::RigidBodyState slam_pose_out;
-        std::vector< ::base::Waypoint > keyframe_trajectory;
+        base::samples::RigidBodyState slam_pose_out, keyframe_pose_out;
+        std::vector< ::base::Waypoint > keyframes_trajectory;
+        std::vector< ::base::Waypoint > allframes_trajectory;
 
         /** Debug intra frame image **/
         RTT::extras::ReadOnlyPointer<base::samples::frame::Frame> frame_out;
@@ -88,6 +89,8 @@ namespace orb_slam2
         /** Features map points **/
         base::samples::Pointcloud features_map;
 
+        /** Task information **/
+        orb_slam2::Information info;
 
     protected:
 
@@ -181,15 +184,24 @@ namespace orb_slam2
 
         /** @brief Calculates whether the computation of a keyframe is required
          */
-        bool needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
+        void needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
 
-        /** @brief Get the Key Frames Pose wrt to the origin
+        /** @brief Get the Frames Pose wrt to the origin
          */
-        void getKeyFramesPose( std::vector< ::base::Waypoint > &trajectory,  const Eigen::Affine3d &tf);
+        void getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::vector< ::base::Waypoint > &frames_trajectory, const Eigen::Affine3d &tf);
 
         /** @brief Get the Sparse map containing the feature points
          */
         void getMapPointsPose( ::base::samples::Pointcloud &points_map,  const Eigen::Affine3d &tf);
+
+        /** @brief Write the KF trajectory in a text file
+         */
+        void saveKFTrajectoryText(const string &filename, const Eigen::Affine3d &tf = Eigen::Affine3d::Identity());
+
+        /** @brief Write frames trajectory in a text file
+         */
+        void saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &tf = Eigen::Affine3d::Identity());
+
     };
 }
 
