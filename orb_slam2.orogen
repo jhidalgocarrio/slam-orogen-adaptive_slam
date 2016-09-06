@@ -46,7 +46,7 @@ task_context "Task" do
         doc 'Frame of the slam pose (normally sensor frame or body frame)'
 
     property('keyframe_samples_out_source_frame', '/std/string').
-        doc 'key frame pose of the slam (normally "keyframe")'+
+        doc 'Last key frame pose of the slam (normally "last_kf")'+
             'The slam localization target frame is taken from the world frame of the transformer.'
 
     property("desired_period", "double").
@@ -99,9 +99,6 @@ task_context "Task" do
     output_port('keyframe_pose_samples_out', '/base/samples/RigidBodyState').
         doc 'Pose for the last Keyframe in the SLAM.'
 
-    output_port('keyframe_trajectory_out', 'std::vector< base::Waypoint >').
-        doc 'Trajectory for all Keyframes in the SLAM.'
-
     #******************************
     #******* Debug Ports **********
     #******************************
@@ -113,6 +110,12 @@ task_context "Task" do
 
     output_port("features_map_out",  "base::samples::Pointcloud").
         doc 'Sparse Map with all the features'
+
+    output_port('keyframes_trajectory_out', 'std::vector< base::Waypoint >').
+        doc 'Trajectory for Keyframes in the SLAM.'
+
+    output_port('allframes_trajectory_out', 'std::vector< base::Waypoint >').
+        doc 'Trajectory for all Frames in the SLAM.'
 
     output_port('task_info_out', 'orb_slam2/Information').
         doc 'SLAM information.'

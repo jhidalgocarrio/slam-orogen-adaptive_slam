@@ -23,8 +23,9 @@ namespace orb_slam2
     struct Information
     {
         base::Time time; //time-stamp
-        int number_relocations;
+        int number_relocalizations;
         int number_loops;
+        float fps;
     };
 }
 
