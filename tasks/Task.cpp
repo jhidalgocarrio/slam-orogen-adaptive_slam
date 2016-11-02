@@ -376,7 +376,7 @@ void Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_sampl
     if (residual < _velocity_residual_threshold.value())
     {
         /** Smaller than threshold reduce the frequency **/
-        new_computing_counts = boost::math::iround(4.0 * _desired_period.value()/_left_frame_period.value());
+        new_computing_counts = boost::math::iround(2.0 * _desired_period.value()/_left_frame_period.value());
         std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
     }
     else if (residual > 2.0 * _velocity_residual_threshold.value())
