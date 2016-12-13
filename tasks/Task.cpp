@@ -30,7 +30,7 @@ Task::~Task()
 void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::base::samples::RigidBodyState &delta_pose_samples_sample)
 {
     #ifdef DEBUG_PRINTS
-    RTT::log(RTT::Warning)<<"[GP_ODOMETRY DELTA_POSE_SAMPLES] Received time-stamp: "<<delta_pose_samples_sample.time.toMicroseconds()<<RTT::endlog();
+    RTT::log(RTT::Warning)<<"[ORB_SLAM2 DELTA_POSE_SAMPLES] Received time-stamp: "<<delta_pose_samples_sample.time.toMicroseconds()<<RTT::endlog();
     #endif
 
     Eigen::Affine3d tf_body_sensor; /** Transformer transformation **/
