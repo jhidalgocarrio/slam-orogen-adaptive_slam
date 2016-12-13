@@ -11,5 +11,6 @@
   <depend package="base/cmake" />
   <depend package="base/orogen/types" />
   <depend package="drivers/orogen/transformer" />
+  <depend package="perception/frame_helper" />
   <depend package="slam/orb_slam2" />
 </package>
