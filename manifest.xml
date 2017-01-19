@@ -13,4 +13,6 @@
   <depend package="drivers/orogen/transformer" />
   <depend package="perception/frame_helper" />
   <depend package="slam/orb_slam2" />
+  <depend package="envire/orogen/envire_core" />
+  <depend package="envire/orogen/envire_pcl" />
 </package>
