@@ -16,7 +16,11 @@ import_types_from "orb_slam2Types.hpp"
 # import_types_from "orb_slam2/CustomType.hpp"
 
 using_library "ORB_SLAM2"
+using_library "envire_core"
 using_library "frame_helper"
+using_library "pcl_common-1.7"
+using_library "pcl_filters-1.7"
+using_library "pcl_io-1.7"
 
 # If this project uses data types that are defined in other oroGen projects,
 # these projects should be imported there as well.
@@ -65,6 +69,28 @@ task_context "Task" do
     property('orb_calibration', '/std/string').
         doc 'Path to the file with the camera calibration and ORB features parameters.'
 
+    #*******************************
+    #**** Dense Map Properties *****
+    #*******************************
+    property('point_cloud_size', 'std::vector<int>').
+        doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
+
+    property('sensor_point_cloud_height', 'int').
+        doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
+
+    property('sensor_point_cloud_width', 'int').
+        doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
+
+    property("output_ply", "/std/string", "").
+        doc "resulting ply file"
+
+    property('outlierfilter_config', 'pituki/OutlierRemovalFilterConfiguration').
+        doc 'Configuration parameters for Radius Outlier Removal filter.'
+
+    property('sensor_conditional_removal_config', 'pituki/ConditionalRemovalConfiguration').
+        doc 'Configuration parameters for the conditional removal filter applied to sensor.'
+
+
     #******************************
     #******* Input ports  *********
     #******************************
@@ -78,6 +104,9 @@ task_context "Task" do
     input_port("right_frame", ro_ptr('base::samples::frame::Frame')).
         doc 'Right camera frame.'
 
+    input_port('point_cloud_samples', 'base/samples/Pointcloud').
+        doc 'Point cloud samples.'
+
     #******************************
     #******* Transformer  *********
     #******************************
@@ -87,6 +116,7 @@ task_context "Task" do
         align_port("delta_pose_samples", 0)
         align_port("left_frame", 0.5)
         align_port("right_frame", 0.5)
+        align_port("point_cloud_samples", 0.5)
         max_latency(1.0)
     end
 

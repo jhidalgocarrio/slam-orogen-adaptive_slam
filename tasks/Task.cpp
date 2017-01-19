@@ -16,15 +16,21 @@ using namespace orb_slam2;
 Task::Task(std::string const& name)
     : TaskBase(name)
 {
+    keyframe_point_cloud.reset(new PCLPointCloud);
+    merge_point_cloud.reset(new PCLPointCloud);
 }
 
 Task::Task(std::string const& name, RTT::ExecutionEngine* engine)
     : TaskBase(name, engine)
 {
+    keyframe_point_cloud.reset(new PCLPointCloud);
+    merge_point_cloud.reset(new PCLPointCloud);
 }
 
 Task::~Task()
 {
+    keyframe_point_cloud.reset();
+    merge_point_cloud.reset();
 }
 
 void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::base::samples::RigidBodyState &delta_pose_samples_sample)
@@ -42,7 +48,7 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
     else if (!_sensor2body.get(ts, tf_body_sensor, false))
     {
         RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR] No transformation provided."<<RTT::endlog();
-       return;
+        return;
     }
 
     /** Set to identity if it is not initialized **/
@@ -57,7 +63,7 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
 
     /** Need to compute a key frame image **/
     if ( this->slam->mpTracker->mState == ORB_SLAM2::Tracking::OK || this->slam->mpTracker->mState == ORB_SLAM2::Tracking::LOST)
-        this->needKeyFrame(delta_pose_samples_sample);
+        this->needFrame(delta_pose_samples_sample);
 }
 
 void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample)
@@ -126,6 +132,42 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
     }
 }
 
+void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::base::samples::Pointcloud &point_cloud_samples_sample)
+{
+    /** Convert to pcl point clouds **/
+    this->toPCLPointCloud(point_cloud_samples_sample, *keyframe_point_cloud.get());
+    keyframe_point_cloud->height = static_cast<int>(_point_cloud_size.value()[0]);
+    keyframe_point_cloud->width = static_cast<int>(_point_cloud_size.value()[1]);
+    std::cout<<"keyframe_point_cloud->width: "<< keyframe_point_cloud->width<<"\n";
+    std::cout<<"keyframe_point_cloud->height: "<< keyframe_point_cloud->height<<"\n";
+    std::cout<<"keyframe_point_cloud->size: "<< keyframe_point_cloud->size()<<"\n";
+
+    /** Conditional Removal in sensor **/
+    if (_sensor_conditional_removal_config.value().filter_on)
+    {
+        this->conditionalRemoval(keyframe_point_cloud, _sensor_conditional_removal_config.value(), keyframe_point_cloud);
+    }
+
+    /** Outlier removal **/
+    if (_outlierfilter_config.value().type != pituki::NONE)
+    {
+        this->outlierRemoval(keyframe_point_cloud, _outlierfilter_config.get(), keyframe_point_cloud);
+    }
+
+    /** Remove NaN **/
+    std::vector<int> indices;
+    PCLPointCloudPtr unorganized_point_cloud(new PCLPointCloud);
+    pcl::removeNaNFromPointCloud(*keyframe_point_cloud, *unorganized_point_cloud, indices); 
+
+    /** Transform the point cloud in world frame **/
+    this->transformPointCloud(*unorganized_point_cloud, this->tf_keyframe_sensor);
+
+    /** Accumulate the cloud points **/
+    *merge_point_cloud += *unorganized_point_cloud;
+    unorganized_point_cloud.reset();
+    unorganized_point_cloud = NULL;
+}
+
 /// The following lines are template definitions for the various state machine
 // hooks defined by Orocos::RTT. See Task.hpp for more detailed
 // documentation about them.
@@ -138,8 +180,8 @@ bool Task::configureHook()
     /** Frame index **/
     this->frame_idx = 0;
 
-    /** Initial need to compute a keyframe is true **/
-    this->flag_process_keyframe = true;
+    /** Initial need to compute a frame is true **/
+    this->flag_process_frame = true;
 
     /** Read the camera calibration parameters **/
     this->cameracalib = _calib_parameters.value();
@@ -179,7 +221,7 @@ bool Task::configureHook()
     this->keyframes_trajectory.clear();
     this->allframes_trajectory.clear();
 
-    /* Initialize the features map **/
+    /** Initialize the features map **/
     this->features_map.points.clear();
     this->features_map.colors.clear();
 
@@ -279,10 +321,10 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
 
     /** ORB_SLAM2 **/
-    this->slam->TrackStereo(img_l, img_r, timestamp.toSeconds(), tf_motion_model);
+    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model);
 
-    /** Set insert key frame to false **/
-    this->flag_process_keyframe = true;
+    /** Set insert frame to false **/
+    this->flag_process_frame = true;
 
     /** Left color image **/
     if (_output_debug.get())
@@ -338,6 +380,24 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
     Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_orb_sensor_1_sensor * tf_body_sensor.inverse();
 
+    /** Check if a Keyframe is inserted **/
+    if (this->slam->mpTracker->new_key_frame_inserted)
+    {
+        /** Get frame id **/
+        std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
+
+        /** Add frame in envire graph **/
+        this->transform_graph.addFrame(frame_id);
+
+        /** Add item to frame **/
+        PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
+        point_cloud_item->setData(*(this->merge_point_cloud));
+        this->transform_graph.addItemToFrame(frame_id, point_cloud_item);
+
+        /** Clear accumulated point cloud in key frame **/
+        this->merge_point_cloud->clear();
+    }
+
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
     this->slam_pose_out.setTransform(tf_world_body);
@@ -357,6 +417,9 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     //this->features_map.time = timestamp;
     //_features_map_out.write(this->features_map);
 
+    /** Tkeyframe_sensor **/
+    this->tf_keyframe_sensor = this->keyframe_pose_out.getTransform() * tf_world_body * tf_body_sensor;
+
     /** Write in the slam information port **/
     this->info.time = timestamp;
     this->info.number_relocalizations = this->slam->mpTracker->number_relocalizations;
@@ -365,7 +428,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     _task_info_out.write(this->info);
 }
 
-void Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
+void Task::needFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
 {
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
@@ -391,10 +454,10 @@ void Task::needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_sampl
         std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
     }
 
-    if (this->flag_process_keyframe)
+    if (this->flag_process_frame)
     {
-        /** KeyFrame has been processed **/
-        this->flag_process_keyframe = false;
+        /** Frame has been processed **/
+        this->flag_process_frame = false;
         this->computing_counts = new_computing_counts;
         std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
     }
@@ -421,7 +484,7 @@ void Task::getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::v
     cv::Mat Two = vpKFs[0]->GetPoseInverse();
 
     /********************************
-     * Store the last kayframe pose 
+     * Store the last keyframe pose 
     *********************************/
     if (vpKFs.size() > 0)
     {
@@ -571,6 +634,139 @@ void Task::saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &
 
     f.close();
     std::cout << std::endl << "trajectory saved!" << std::endl;
+
+    return;
+}
+
+void Task::toPCLPointCloud(const ::base::samples::Pointcloud & pc, pcl::PointCloud< PointType >& pcl_pc, double density)
+{
+    pcl_pc.clear();
+    std::vector<bool> mask;
+    unsigned sample_count = (unsigned)(density * pc.points.size());
+
+    if(density <= 0.0 || pc.points.size() == 0)
+    {
+        return;
+    }
+    else if(sample_count >= pc.points.size())
+    {
+        mask.resize(pc.points.size(), true);
+    }
+    else
+    {
+        mask.resize(pc.points.size(), false);
+        unsigned samples_drawn = 0;
+
+        while(samples_drawn < sample_count)
+        {
+            unsigned index = rand() % pc.points.size();
+            if(mask[index] == false)
+            {
+                mask[index] = true;
+                samples_drawn++;
+            }
+        }
+    }
+
+    for(size_t i = 0; i < pc.points.size(); ++i)
+    {
+        if(mask[i])
+        {
+            PointType pcl_point;
+            pcl_point.x = pc.points[i].x();
+            pcl_point.y = pc.points[i].y();
+            pcl_point.z = pc.points[i].z();
+            uint8_t r = pc.colors[i].x()*255.00, g = pc.colors[i].y()*255.00, b = pc.colors[i].z()*255.00;
+            uint32_t rgb = ((uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b);
+            pcl_point.rgb = *reinterpret_cast<float*>(&rgb);
+
+            /** Point info **/
+            pcl_pc.push_back(pcl_point);
+        }
+    }
+
+    /** All data points are finite (no NaN or Infinite) **/
+    pcl_pc.is_dense = false;
+}
+
+void Task::transformPointCloud(pcl::PointCloud<PointType> &pcl_pc, const Eigen::Affine3d& transformation)
+{
+    for(std::vector< PointType, Eigen::aligned_allocator<PointType> >::iterator it = pcl_pc.begin(); it != pcl_pc.end(); it++)
+    {
+        Eigen::Vector3d point (it->x, it->y, it->z);
+        point = transformation * point;
+        PointType pcl_point;
+        pcl_point.x = point[0]; pcl_point.y = point[1]; pcl_point.z = point[2];
+        pcl_point.rgb = it->rgb;
+        *it = pcl_point;
+    }
+}
+
+void Task::conditionalRemoval(const PCLPointCloudPtr &points, const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out)
+{
+    /** Clean the out point cloud **/
+    outliersampled_out->clear();
+
+    /**  build the condition **/
+    pcl::ConditionAnd<PointType>::Ptr range_cond (new
+      pcl::ConditionAnd<PointType> ());
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::GT, config.gt_boundary[0])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::LT, config.lt_boundary[0])));
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::GT, config.gt_boundary[1])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::LT, config.lt_boundary[1])));
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::GT, config.gt_boundary[2])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::LT, config.lt_boundary[2])));
+
+    /** Apply the condition filter **/
+    pcl::ConditionalRemoval<PointType> condrem;
+    condrem.setCondition (range_cond);
+    condrem.setInputCloud (points);
+    condrem.setKeepOrganized(config.keep_organized);
+    condrem.filter (*outliersampled_out);
+}
+
+void Task::outlierRemoval(const PCLPointCloudPtr &points, const pituki::OutlierRemovalFilterConfiguration &config, PCLPointCloudPtr &outliersampled_out)
+{
+    if (config.type == pituki::STATISTICAL)
+    {
+        pcl::StatisticalOutlierRemoval<PointType> sor;
+
+        sor.setMeanK(config.parameter_one);
+        sor.setStddevMulThresh(config.parameter_two);
+
+        #ifdef DEBUG_PRINTS
+        std::cout<<"STATISTICAL FILTER\n";
+        #endif
+        outliersampled_out->width = points->width;
+        outliersampled_out->height = points->height;
+        sor.setInputCloud(points);
+        sor.filter (*outliersampled_out);
+    }
+    else if (config.type == pituki::RADIUS)
+    {
+        pcl::RadiusOutlierRemoval<PointType> ror;
+
+        ror.setRadiusSearch(config.parameter_one);
+        ror.setMinNeighborsInRadius(config.parameter_two);
+
+        #ifdef DEBUG_PRINTS
+        std::cout<<"RADIUS FILTER\n";
+        #endif
+        PCLPointCloud filtered_cloud;
+        outliersampled_out->width = points->width;
+        outliersampled_out->height = points->height;
+        ror.setInputCloud(points);
+        ror.filter (*outliersampled_out);
+    }
 
     return;
 }

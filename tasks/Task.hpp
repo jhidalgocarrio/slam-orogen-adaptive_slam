@@ -15,12 +15,29 @@
 #include <frame_helper/FrameHelper.h> /** Rock lib for manipulate frames **/
 #include <frame_helper/FrameHelperTypes.h> /** Types for FrameHelper **/
 
+/** PCL **/
+#include <pcl/point_types.h>
+#include <pcl/point_cloud.h>
+#include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/filters/conditional_removal.h>
+
+/** Envire **/
+#include <envire_core/all>
+
 /** Boost **/
 #include <boost/shared_ptr.hpp> /** shared pointers **/
 #include <boost/math/special_functions/round.hpp> // to round a number in standard C++ < 11
 
 namespace orb_slam2
 {
+
+    /** PCL TYPES **/
+    typedef pcl::PointXYZRGB PointType;
+    typedef pcl::PointCloud<PointType> PCLPointCloud;
+    typedef PCLPointCloud::Ptr PCLPointCloudPtr;
+
+    typedef envire::core::Item<PCLPointCloud> PointCloudItem;
 
     /*! \class Task
      * \brief The task context provides and requires services. It uses an ExecutionEngine to perform its functions.
@@ -49,15 +66,21 @@ namespace orb_slam2
         /*** Property Variables ***/
         /**************************/
 
-        //Intrinsic and extrinsic parameters for the pinhole camera model
+        /** Intrinsic and extrinsic parameters for the pinhole camera model **/
         frame_helper::StereoCalibration cameracalib;
+
+        /***************************/
+        /** Input Port Variables **/
+        /***************************/
+
+        PCLPointCloudPtr keyframe_point_cloud;
 
         /******************************************/
         /*** General Internal Storage Variables ***/
         /******************************************/
 
-        /** Flag to know when the key-frame has been processed **/
-        bool flag_process_keyframe;
+        /** Flag to know when the image frame has been processed **/
+        bool flag_process_frame;
 
         // Create SLAM system. It initializes all system threads and gets ready to process frames.
         boost::shared_ptr< ::ORB_SLAM2::System> slam;
@@ -75,6 +98,13 @@ namespace orb_slam2
         Eigen::Affine3d tf_odo_sensor_sensor_1; // Relative camera transformations from delta_poses Tsensor(k)_sensor(k-1)
 
         Eigen::Affine3d tf_orb_sensor_1_sensor; //Relative camera transformation from ORB_SLAM2 Tsensor(k-1)_sensor(k)
+
+        Eigen::Affine3d tf_keyframe_sensor; // Transformation from last keyframe to sensor frame Tkeyframe_sensor(k)
+
+        /** The map in a graph structure **/
+        envire::core::EnvireGraph transform_graph;
+
+        PCLPointCloudPtr merge_point_cloud;
 
         /***************************/
         /** Output Port Variables **/
@@ -99,6 +129,8 @@ namespace orb_slam2
         virtual void left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample);
 
         virtual void right_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &right_frame_sample);
+
+        virtual void point_cloud_samplesTransformerCallback(const base::Time &ts, const ::base::samples::Pointcloud &point_cloud_samples_sample);
 
     public:
         /** TaskContext constructor for Task
@@ -182,9 +214,9 @@ namespace orb_slam2
                 const base::samples::frame::Frame &frame_right,
                 const base::Time &timestamp);
 
-        /** @brief Calculates whether the computation of a keyframe is required
+        /** @brief Calculates whether the computation of a frame is required
          */
-        void needKeyFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
+        void needFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
 
         /** @brief Get the Frames Pose wrt to the origin
          */
@@ -201,6 +233,22 @@ namespace orb_slam2
         /** @brief Write frames trajectory in a text file
          */
         void saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &tf = Eigen::Affine3d::Identity());
+
+        /** @brief Convert to point cloud
+         */
+        void toPCLPointCloud(const ::base::samples::Pointcloud & pc, pcl::PointCloud< PointType >& pcl_pc, double density = 1.0);
+
+        /** @brief Transform a pcl point cloud
+         * */
+        void transformPointCloud(PCLPointCloud &pcl_pc, const Eigen::Affine3d& transformation);
+
+        /** @brief Space conditional removal filter
+         */
+        void conditionalRemoval(const PCLPointCloudPtr &points,const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out);
+
+        /** @brief Outliers filter removal
+         */
+        void outlierRemoval(const PCLPointCloudPtr &points, const pituki::OutlierRemovalFilterConfiguration &config, PCLPointCloudPtr &outliersampled_out);
 
     };
 }
