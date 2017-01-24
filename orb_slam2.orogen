@@ -75,12 +75,6 @@ task_context "Task" do
     property('point_cloud_size', 'std::vector<int>').
         doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
 
-    property('sensor_point_cloud_height', 'int').
-        doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
-
-    property('sensor_point_cloud_width', 'int').
-        doc 'PCL Point clouds needs to be organized. It will take this property to organize them.'
-
     property("output_ply", "/std/string", "").
         doc "resulting ply file"
 
