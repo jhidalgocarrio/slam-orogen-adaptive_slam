@@ -141,36 +141,16 @@ void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::
 
     /** Convert to pcl point clouds **/
     this->toPCLPointCloud(point_cloud_samples_sample, *keyframe_point_cloud.get());
-    keyframe_point_cloud->height = static_cast<int>(_point_cloud_size.value()[0]);
-    keyframe_point_cloud->width = static_cast<int>(_point_cloud_size.value()[1]);
     std::cout<<"keyframe_point_cloud->width: "<< keyframe_point_cloud->width<<"\n";
     std::cout<<"keyframe_point_cloud->height: "<< keyframe_point_cloud->height<<"\n";
     std::cout<<"keyframe_point_cloud->size: "<< keyframe_point_cloud->size()<<"\n";
 
-    /** Conditional Removal in sensor **/
-    if (_sensor_conditional_removal_config.value().filter_on)
-    {
-        this->conditionalRemoval(keyframe_point_cloud, _sensor_conditional_removal_config.value(), keyframe_point_cloud);
-    }
-
-    /** Outlier removal **/
-    if (_outlierfilter_config.value().type != pituki::NONE)
-    {
-        this->outlierRemoval(keyframe_point_cloud, _outlierfilter_config.get(), keyframe_point_cloud);
-    }
-
-    /** Remove NaN **/
-    std::vector<int> indices;
-    PCLPointCloudPtr unorganized_point_cloud(new PCLPointCloud);
-    pcl::removeNaNFromPointCloud(*keyframe_point_cloud, *unorganized_point_cloud, indices); 
-
-    /** Transform the point cloud in world frame **/
-    this->transformPointCloud(*unorganized_point_cloud, this->tf_keyframe_sensor);
+    /** Transform the point cloud in keyframe frame **/
+    this->transformPointCloud(*keyframe_point_cloud, this->tf_keyframe_sensor);
 
     /** Accumulate the cloud points **/
-    *merge_point_cloud += *unorganized_point_cloud;
-    unorganized_point_cloud.reset();
-    unorganized_point_cloud = NULL;
+    *merge_point_cloud += *keyframe_point_cloud;
+    keyframe_point_cloud->clear();
 }
 
 /// The following lines are template definitions for the various state machine
@@ -407,30 +387,30 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     //_features_map_out.write(this->features_map);
 
     /** Check if a Keyframe is inserted **/
-    if (this->slam->mpTracker->new_key_frame_inserted)
-    {
-        /** Get frame id **/
-        std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
+   // if (this->slam->mpTracker->new_key_frame_inserted)
+   // {
+   //     /** Get frame id **/
+   //     std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
+   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
 
-        /** Add frame in envire graph **/
-        this->envire_graph.addFrame(frame_id);
+   //     /** Add frame in envire graph **/
+   //     this->envire_graph.addFrame(frame_id);
 
-        /** Add item to frame **/
-        PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
-        point_cloud_item->setData(*(this->merge_point_cloud));
-        this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
+   //     /** Add item to frame **/
+   //     PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
+   //     point_cloud_item->setData(*(this->merge_point_cloud));
+   //     this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
 
-        /** Add transformation to the graph **/
-        envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
-        this->envire_graph.addTransform(this->origin_frame_id, frame_id, tf);
+   //     /** Add transformation to the graph **/
+   //     envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
+   //     this->envire_graph.addTransform(this->origin_frame_id, frame_id, tf);
 
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
+   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
+   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
 
-        /** Clear accumulated point cloud in key frame **/
-        this->merge_point_cloud->clear();
-    }
+   //     /** Clear accumulated point cloud in key frame **/
+   //     this->merge_point_cloud->clear();
+   // }
 
     /** Tkeyframe_sensor **/
     this->tf_keyframe_sensor = this->keyframe_pose_out.getTransform() * tf_world_body * tf_body_sensor;
@@ -717,71 +697,3 @@ void Task::transformPointCloud(pcl::PointCloud<PointType> &pcl_pc, const Eigen::
     }
 }
 
-void Task::conditionalRemoval(const PCLPointCloudPtr &points, const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out)
-{
-    /** Clean the out point cloud **/
-    outliersampled_out->clear();
-
-    /**  build the condition **/
-    pcl::ConditionAnd<PointType>::Ptr range_cond (new
-      pcl::ConditionAnd<PointType> ());
-
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::GT, config.gt_boundary[0])));
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::LT, config.lt_boundary[0])));
-
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::GT, config.gt_boundary[1])));
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::LT, config.lt_boundary[1])));
-
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::GT, config.gt_boundary[2])));
-    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
-      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::LT, config.lt_boundary[2])));
-
-    /** Apply the condition filter **/
-    pcl::ConditionalRemoval<PointType> condrem;
-    condrem.setCondition (range_cond);
-    condrem.setInputCloud (points);
-    condrem.setKeepOrganized(config.keep_organized);
-    condrem.filter (*outliersampled_out);
-}
-
-void Task::outlierRemoval(const PCLPointCloudPtr &points, const pituki::OutlierRemovalFilterConfiguration &config, PCLPointCloudPtr &outliersampled_out)
-{
-    if (config.type == pituki::STATISTICAL)
-    {
-        pcl::StatisticalOutlierRemoval<PointType> sor;
-
-        sor.setMeanK(config.parameter_one);
-        sor.setStddevMulThresh(config.parameter_two);
-
-        #ifdef DEBUG_PRINTS
-        std::cout<<"STATISTICAL FILTER\n";
-        #endif
-        outliersampled_out->width = points->width;
-        outliersampled_out->height = points->height;
-        sor.setInputCloud(points);
-        sor.filter (*outliersampled_out);
-    }
-    else if (config.type == pituki::RADIUS)
-    {
-        pcl::RadiusOutlierRemoval<PointType> ror;
-
-        ror.setRadiusSearch(config.parameter_one);
-        ror.setMinNeighborsInRadius(config.parameter_two);
-
-        #ifdef DEBUG_PRINTS
-        std::cout<<"RADIUS FILTER\n";
-        #endif
-        PCLPointCloud filtered_cloud;
-        outliersampled_out->width = points->width;
-        outliersampled_out->height = points->height;
-        ror.setInputCloud(points);
-        ror.filter (*outliersampled_out);
-    }
-
-    return;
-}

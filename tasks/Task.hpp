@@ -18,9 +18,6 @@
 /** PCL **/
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
-#include <pcl/filters/radius_outlier_removal.h>
-#include <pcl/filters/statistical_outlier_removal.h>
-#include <pcl/filters/conditional_removal.h>
 
 /** Envire **/
 #include <envire_core/all>
@@ -242,14 +239,6 @@ namespace orb_slam2
         /** @brief Transform a pcl point cloud
          * */
         void transformPointCloud(PCLPointCloud &pcl_pc, const Eigen::Affine3d& transformation);
-
-        /** @brief Space conditional removal filter
-         */
-        void conditionalRemoval(const PCLPointCloudPtr &points,const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out);
-
-        /** @brief Outliers filter removal
-         */
-        void outlierRemoval(const PCLPointCloudPtr &points, const pituki::OutlierRemovalFilterConfiguration &config, PCLPointCloudPtr &outliersampled_out);
 
     };
 }
