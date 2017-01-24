@@ -2,7 +2,7 @@
 
 #include "Task.hpp"
 
-//#define DEBUG_PRINTS 1
+#define DEBUG_PRINTS 1
 
 #ifndef D2R
 #define D2R M_PI/180.00 /** Convert degree to radian **/
@@ -134,6 +134,11 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
 
 void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::base::samples::Pointcloud &point_cloud_samples_sample)
 {
+
+    #ifdef DEBUG_PRINTS
+    std::cout<< "[ORB_SLAM2 POINT_CLOUD] Point cloud arrived at: "<<point_cloud_samples_sample.time.toString()<<std::endl;
+    #endif
+
     /** Convert to pcl point clouds **/
     this->toPCLPointCloud(point_cloud_samples_sample, *keyframe_point_cloud.get());
     keyframe_point_cloud->height = static_cast<int>(_point_cloud_size.value()[0]);
@@ -179,6 +184,8 @@ bool Task::configureHook()
 
     /** Frame index **/
     this->frame_idx = 0;
+
+    this->origin_frame_id = "initial_frame";
 
     /** Initial need to compute a frame is true **/
     this->flag_process_frame = true;
@@ -380,24 +387,6 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
     Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_orb_sensor_1_sensor * tf_body_sensor.inverse();
 
-    /** Check if a Keyframe is inserted **/
-    if (this->slam->mpTracker->new_key_frame_inserted)
-    {
-        /** Get frame id **/
-        std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
-
-        /** Add frame in envire graph **/
-        this->transform_graph.addFrame(frame_id);
-
-        /** Add item to frame **/
-        PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
-        point_cloud_item->setData(*(this->merge_point_cloud));
-        this->transform_graph.addItemToFrame(frame_id, point_cloud_item);
-
-        /** Clear accumulated point cloud in key frame **/
-        this->merge_point_cloud->clear();
-    }
-
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
     this->slam_pose_out.setTransform(tf_world_body);
@@ -416,6 +405,32 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     //this->getMapPointsPose(this->features_map, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
     //this->features_map.time = timestamp;
     //_features_map_out.write(this->features_map);
+
+    /** Check if a Keyframe is inserted **/
+    if (this->slam->mpTracker->new_key_frame_inserted)
+    {
+        /** Get frame id **/
+        std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
+
+        /** Add frame in envire graph **/
+        this->envire_graph.addFrame(frame_id);
+
+        /** Add item to frame **/
+        PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
+        point_cloud_item->setData(*(this->merge_point_cloud));
+        this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
+
+        /** Add transformation to the graph **/
+        envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
+        this->envire_graph.addTransform(this->origin_frame_id, frame_id, tf);
+
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
+
+        /** Clear accumulated point cloud in key frame **/
+        this->merge_point_cloud->clear();
+    }
 
     /** Tkeyframe_sensor **/
     this->tf_keyframe_sensor = this->keyframe_pose_out.getTransform() * tf_world_body * tf_body_sensor;

@@ -101,10 +101,11 @@ namespace orb_slam2
 
         Eigen::Affine3d tf_keyframe_sensor; // Transformation from last keyframe to sensor frame Tkeyframe_sensor(k)
 
-        /** The map in a graph structure **/
-        envire::core::EnvireGraph transform_graph;
+        std::string origin_frame_id;
 
-        PCLPointCloudPtr merge_point_cloud;
+        envire::core::EnvireGraph envire_graph; // The map in a graph structure
+
+        PCLPointCloudPtr merge_point_cloud; // merge point cloud from sensor
 
         /***************************/
         /** Output Port Variables **/
