@@ -2,6 +2,8 @@
 
 #include "Task.hpp"
 
+#include <envire_core/graph/GraphViz.hpp>
+
 #define DEBUG_PRINTS 1
 
 #ifndef D2R
@@ -165,7 +167,12 @@ bool Task::configureHook()
     /** Frame index **/
     this->frame_idx = 0;
 
-    this->origin_frame_id = "initial_frame";
+    /** Add the first frame in envire_graph **/
+    //this->origin_frame_id = "initial_frame";
+    //this->envire_graph.addFrame(this->origin_frame_id);
+
+    std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
+    std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
 
     /** Initial need to compute a frame is true **/
     this->flag_process_frame = true;
@@ -274,6 +281,10 @@ void Task::cleanupHook()
 
     /** Save the all frames trajectory in text format (translation + heading) **/
     this->saveAllTrajectoryText("orb_slam2_allframes_trajectory.data");
+
+    /** Save envire_graph dot image **/
+    envire::core::GraphViz viz;
+    viz.write(this->envire_graph, "envire_graph_orb_slam2_graphviz.dot");
 
     /** Reset keyframe trajectory out port**/
     this->keyframes_trajectory.clear();
@@ -387,30 +398,43 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     //_features_map_out.write(this->features_map);
 
     /** Check if a Keyframe is inserted **/
-   // if (this->slam->mpTracker->new_key_frame_inserted)
-   // {
-   //     /** Get frame id **/
-   //     std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
-   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
+    if (this->slam->mpTracker->new_key_frame_inserted)
+    {
+        /** Get frame id **/
+        std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
 
-   //     /** Add frame in envire graph **/
-   //     this->envire_graph.addFrame(frame_id);
+        if (this->envire_graph.num_vertices() ==  0)
+        {
+            /** Store the name of the first Keyframe **/
+            this->first_kf_id = frame_id;
+            std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] FIRST_KEYFRAME_ID: "<< this->first_kf_id <<"\n";
+        }
 
-   //     /** Add item to frame **/
-   //     PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
-   //     point_cloud_item->setData(*(this->merge_point_cloud));
-   //     this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
+        /** Add frame in envire graph **/
+        this->envire_graph.addFrame(frame_id);
 
-   //     /** Add transformation to the graph **/
-   //     envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
-   //     this->envire_graph.addTransform(this->origin_frame_id, frame_id, tf);
+        /** Add transformation to the graph **/
+        envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
+        this->envire_graph.addTransform(this->first_kf_id, frame_id, tf);
 
-   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
-   //     std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] PUSH merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
 
-   //     /** Clear accumulated point cloud in key frame **/
-   //     this->merge_point_cloud->clear();
-   // }
+        if (this->merge_point_cloud->size() > 0)
+        {
+            /** Add item to frame **/
+            PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
+            point_cloud_item->setData(*(this->merge_point_cloud));
+            this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
+        }
+
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
+
+        /** Clear accumulated point cloud in key frame **/
+        this->merge_point_cloud->clear();
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] CLEAN merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
+    }
 
     /** Tkeyframe_sensor **/
     this->tf_keyframe_sensor = this->keyframe_pose_out.getTransform() * tf_world_body * tf_body_sensor;
@@ -608,7 +632,7 @@ void Task::saveKFTrajectoryText(const string &filename, const Eigen::Affine3d &t
     }
 
     f.close();
-    std::cout << std::endl << "trajectory saved!" << std::endl;
+    std::cout << std::endl << "trajectory saved with "<<this->keyframes_trajectory.size()<<" KFs!" << std::endl;
 
     return;
 }
@@ -628,7 +652,7 @@ void Task::saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &
     }
 
     f.close();
-    std::cout << std::endl << "trajectory saved!" << std::endl;
+    std::cout << std::endl << "trajectory saved with "<<this->allframes_trajectory.size()<<" frames!" << std::endl;
 
     return;
 }

@@ -98,7 +98,7 @@ namespace orb_slam2
 
         Eigen::Affine3d tf_keyframe_sensor; // Transformation from last keyframe to sensor frame Tkeyframe_sensor(k)
 
-        std::string origin_frame_id;
+        std::string first_kf_id;
 
         envire::core::EnvireGraph envire_graph; // The map in a graph structure
 
