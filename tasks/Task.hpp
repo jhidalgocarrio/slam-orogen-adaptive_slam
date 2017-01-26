@@ -240,6 +240,8 @@ namespace orb_slam2
          * */
         void transformPointCloud(PCLPointCloud &pcl_pc, const Eigen::Affine3d& transformation);
 
+    public:
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
     };
 }
 
