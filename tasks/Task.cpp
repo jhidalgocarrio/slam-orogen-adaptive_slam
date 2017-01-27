@@ -2,7 +2,11 @@
 
 #include "Task.hpp"
 
+/** Envire **/
 #include <envire_core/graph/GraphViz.hpp>
+
+/** PCL **/
+#include <pcl/conversions.h>
 
 #define DEBUG_PRINTS 1
 
@@ -134,7 +138,7 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
     }
 }
 
-void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::base::samples::Pointcloud &point_cloud_samples_sample)
+void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> &point_cloud_samples_sample)
 {
 
     #ifdef DEBUG_PRINTS
@@ -142,13 +146,20 @@ void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::
     #endif
 
     /** Convert to pcl point clouds **/
-    this->toPCLPointCloud(point_cloud_samples_sample, *keyframe_point_cloud.get());
+    pcl::fromPCLPointCloud2(point_cloud_samples_sample.data, *keyframe_point_cloud.get());
     std::cout<<"keyframe_point_cloud->width: "<< keyframe_point_cloud->width<<"\n";
     std::cout<<"keyframe_point_cloud->height: "<< keyframe_point_cloud->height<<"\n";
     std::cout<<"keyframe_point_cloud->size: "<< keyframe_point_cloud->size()<<"\n";
 
+    /** Current KF transformation **/
+    g2o::SE3Quat se3_kf_nav = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->getLastKeyFramePose());
+
+    Eigen::Affine3d tf_kf_cf(se3_kf_nav.rotation()); // Transformation from last keyframe to sensor frame
+    tf_kf_cf.translation() = se3_kf_nav.translation();
+    tf_kf_cf = tf_kf_cf * this->tf_nav_orb_sensor;
+
     /** Transform the point cloud in keyframe frame **/
-    this->transformPointCloud(*keyframe_point_cloud, this->tf_keyframe_sensor);
+    this->transformPointCloud(*keyframe_point_cloud, tf_kf_cf);
 
     /** Accumulate the cloud points **/
     *merge_point_cloud += *keyframe_point_cloud;
@@ -166,10 +177,6 @@ bool Task::configureHook()
 
     /** Frame index **/
     this->frame_idx = 0;
-
-    /** Add the first frame in envire_graph **/
-    //this->origin_frame_id = "initial_frame";
-    //this->envire_graph.addFrame(this->origin_frame_id);
 
     std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
     std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
@@ -193,7 +200,7 @@ bool Task::configureHook()
     this->tf_odo_sensor_sensor_1.matrix()= Eigen::Matrix<double, 4, 4>::Zero() * base::NaN<double>();
 
     /** Set Tsensor(k-1)_sensor from ORB_SLAM2  to Identity*/
-    this->tf_orb_sensor_1_sensor.setIdentity();
+    this->tf_nav_orb_sensor.setIdentity();
 
     /** Optimized Output port **/
     this->slam_pose_out.invalidate();
@@ -371,12 +378,12 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         g2o::SE3Quat se3_nav_sensor = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->mCurrentFrame.mTcw).inverse();
 
         /** SE3 to Affine3d **/
-       this->tf_orb_sensor_1_sensor = se3_nav_sensor.rotation();
-       this->tf_orb_sensor_1_sensor.translation() = se3_nav_sensor.translation();
+       this->tf_nav_orb_sensor = se3_nav_sensor.rotation();
+       this->tf_nav_orb_sensor.translation() = se3_nav_sensor.translation();
     }
 
     /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
-    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_orb_sensor_1_sensor * tf_body_sensor.inverse();
+    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_nav_orb_sensor * tf_body_sensor.inverse();
 
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
@@ -431,13 +438,16 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
 
+        /** Write the point cloud into the port **/
+        ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> point_cloud_out;
+        pcl::toPCLPointCloud2(*merge_point_cloud.get(), point_cloud_out.data);
+        point_cloud_out.time = timestamp;
+        _point_cloud_samples_out.write(point_cloud_out);
+
         /** Clear accumulated point cloud in key frame **/
         this->merge_point_cloud->clear();
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] CLEAN merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
     }
-
-    /** Tkeyframe_sensor **/
-    this->tf_keyframe_sensor = this->keyframe_pose_out.getTransform() * tf_world_body * tf_body_sensor;
 
     /** Write in the slam information port **/
     this->info.time = timestamp;
@@ -655,57 +665,6 @@ void Task::saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &
     std::cout << std::endl << "trajectory saved with "<<this->allframes_trajectory.size()<<" frames!" << std::endl;
 
     return;
-}
-
-void Task::toPCLPointCloud(const ::base::samples::Pointcloud & pc, pcl::PointCloud< PointType >& pcl_pc, double density)
-{
-    pcl_pc.clear();
-    std::vector<bool> mask;
-    unsigned sample_count = (unsigned)(density * pc.points.size());
-
-    if(density <= 0.0 || pc.points.size() == 0)
-    {
-        return;
-    }
-    else if(sample_count >= pc.points.size())
-    {
-        mask.resize(pc.points.size(), true);
-    }
-    else
-    {
-        mask.resize(pc.points.size(), false);
-        unsigned samples_drawn = 0;
-
-        while(samples_drawn < sample_count)
-        {
-            unsigned index = rand() % pc.points.size();
-            if(mask[index] == false)
-            {
-                mask[index] = true;
-                samples_drawn++;
-            }
-        }
-    }
-
-    for(size_t i = 0; i < pc.points.size(); ++i)
-    {
-        if(mask[i])
-        {
-            PointType pcl_point;
-            pcl_point.x = pc.points[i].x();
-            pcl_point.y = pc.points[i].y();
-            pcl_point.z = pc.points[i].z();
-            uint8_t r = pc.colors[i].x()*255.00, g = pc.colors[i].y()*255.00, b = pc.colors[i].z()*255.00;
-            uint32_t rgb = ((uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b);
-            pcl_point.rgb = *reinterpret_cast<float*>(&rgb);
-
-            /** Point info **/
-            pcl_pc.push_back(pcl_point);
-        }
-    }
-
-    /** All data points are finite (no NaN or Infinite) **/
-    pcl_pc.is_dense = false;
 }
 
 void Task::transformPointCloud(pcl::PointCloud<PointType> &pcl_pc, const Eigen::Affine3d& transformation)

@@ -5,6 +5,7 @@ name "orb_slam2"
 # If new data types need to be defined, they have to be put in a separate C++
 # header, and this header will be loaded here
 import_types_from "base"
+import_types_from "envire_pcl"
 import_types_from "frame_helper/Calibration.h"
 import_types_from "frame_helper/FrameHelperTypes.h"
 import_types_from "orb_slam2Types.hpp"
@@ -87,7 +88,7 @@ task_context "Task" do
     input_port("right_frame", ro_ptr('base::samples::frame::Frame')).
         doc 'Right camera frame.'
 
-    input_port('point_cloud_samples', 'base/samples/Pointcloud').
+    input_port('point_cloud_samples', 'envire/core/SpatioTemporal<pcl/PCLPointCloud2>').
         doc 'Point cloud samples.'
 
     #******************************
@@ -132,6 +133,9 @@ task_context "Task" do
 
     output_port('task_info_out', 'orb_slam2/Information').
         doc 'SLAM information.'
+
+    output_port('point_cloud_samples_out', '/envire/core/SpatioTemporal<pcl/PCLPointCloud2>').
+        doc 'Output point cloud.'
 
     port_driven
 

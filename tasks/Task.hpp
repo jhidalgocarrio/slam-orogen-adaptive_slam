@@ -94,9 +94,8 @@ namespace orb_slam2
 
         Eigen::Affine3d tf_odo_sensor_sensor_1; // Relative camera transformations from delta_poses Tsensor(k)_sensor(k-1)
 
-        Eigen::Affine3d tf_orb_sensor_1_sensor; //Relative camera transformation from ORB_SLAM2 Tsensor(k-1)_sensor(k)
+        Eigen::Affine3d tf_nav_orb_sensor; //Relative camera transformation from ORB_SLAM2 Tsensor(k-1)_sensor(k)
 
-        Eigen::Affine3d tf_keyframe_sensor; // Transformation from last keyframe to sensor frame Tkeyframe_sensor(k)
 
         std::string first_kf_id;
 
@@ -128,7 +127,7 @@ namespace orb_slam2
 
         virtual void right_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &right_frame_sample);
 
-        virtual void point_cloud_samplesTransformerCallback(const base::Time &ts, const ::base::samples::Pointcloud &point_cloud_samples_sample);
+        virtual void point_cloud_samplesTransformerCallback(const base::Time &ts, const ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> &point_cloud_samples_sample);
 
     public:
         /** TaskContext constructor for Task
@@ -231,10 +230,6 @@ namespace orb_slam2
         /** @brief Write frames trajectory in a text file
          */
         void saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &tf = Eigen::Affine3d::Identity());
-
-        /** @brief Convert to point cloud
-         */
-        void toPCLPointCloud(const ::base::samples::Pointcloud & pc, pcl::PointCloud< PointType >& pcl_pc, double density = 1.0);
 
         /** @brief Transform a pcl point cloud
          * */
