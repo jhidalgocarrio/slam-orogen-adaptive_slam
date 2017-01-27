@@ -18,6 +18,7 @@
 /** PCL **/
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
+#include <pcl/filters/voxel_grid.h>
 
 /** Envire **/
 #include <envire_core/all>
@@ -234,6 +235,23 @@ namespace orb_slam2
         /** @brief Transform a pcl point cloud
          * */
         void transformPointCloud(PCLPointCloud &pcl_pc, const Eigen::Affine3d& transformation);
+
+        /** @brief down sample a point cl
+         */
+        void downsample(const PCLPointCloudPtr &points, const ::base::Vector3d &leaf_size, PCLPointCloudPtr &downsampled_out);
+
+        /** @brief get the point could from a envire_graph no
+         */
+        PCLPointCloud &getPointCloud(const std::string &frame_id);
+
+        /** brief Update the envire graph transformations
+         */
+        void updateEnvireGraph(const Eigen::Affine3d &tf);
+
+        /** @brief Combine all the point clouds stored in the envire_graph and
+         * merge them into a single point cloud.
+         */
+        void mergePointClouds(PCLPointCloud &merged_point_cloud);
 
     public:
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW;

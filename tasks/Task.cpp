@@ -7,6 +7,7 @@
 
 /** PCL **/
 #include <pcl/conversions.h>
+#include <pcl/io/ply_io.h>
 
 #define DEBUG_PRINTS 1
 
@@ -293,6 +294,12 @@ void Task::cleanupHook()
     envire::core::GraphViz viz;
     viz.write(this->envire_graph, "envire_graph_orb_slam2_graphviz.dot");
 
+    /** Create the map point cloud **/
+    this->mergePointClouds(*merge_point_cloud.get());
+
+    /** Save the map point cloud to file **/
+    pcl::io::savePLYFileBinary (_output_ply.value(), *merge_point_cloud.get());
+
     /** Reset keyframe trajectory out port**/
     this->keyframes_trajectory.clear();
     this->allframes_trajectory.clear();
@@ -448,6 +455,9 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         this->merge_point_cloud->clear();
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] CLEAN merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
     }
+
+    /** Update the envire graph with the optimized transformation values **/
+    this->updateEnvireGraph(Eigen::Affine3d(tf_world_nav * tf_body_sensor));
 
     /** Write in the slam information port **/
     this->info.time = timestamp;
@@ -679,4 +689,94 @@ void Task::transformPointCloud(pcl::PointCloud<PointType> &pcl_pc, const Eigen::
         *it = pcl_point;
     }
 }
+
+void Task::downsample (const PCLPointCloudPtr &points, const ::base::Vector3d &leaf_size, PCLPointCloudPtr &downsampled_out)
+{
+
+    pcl::VoxelGrid<PointType> vox_grid;
+    vox_grid.setLeafSize (leaf_size[0], leaf_size[1], leaf_size[2]);
+    vox_grid.setInputCloud (points);
+    vox_grid.filter (*downsampled_out);
+
+    return;
+}
+
+PCLPointCloud &Task::getPointCloud(const std::string &frame_id)
+{
+    try
+    {
+        /** Get Item return an iterator to the first element **/
+        orb_slam2::PointCloudItem &point_cloud_item = *(this->envire_graph.getItem<orb_slam2::PointCloudItem>(frame_id));
+        return point_cloud_item.getData();
+    }catch(envire::core::UnknownFrameException &ufex)
+    {
+        std::cerr << ufex.what() << std::endl;
+        throw "[ORB_SLAM2] Envire Graph: getPointCloud() point cloud not found\n";
+    }
+}
+
+void Task::updateEnvireGraph(const Eigen::Affine3d &tf)
+{
+    std::cout<<"[ORB_SLAM2 UPDATE ENVIRE_GRAPH]:\n";
+
+    /** Update the envire_graph transformation **/
+    std::vector< ::ORB_SLAM2::KeyFrame* > vpKFs = this->slam->mpMap->GetAllKeyFrames();
+    std::sort(vpKFs.begin(),vpKFs.end(), ::ORB_SLAM2::KeyFrame::lId);
+    cv::Mat Two = vpKFs[0]->GetPoseInverse();
+
+    std::cout<<"first_kf_id:"<<this->first_kf_id<<" vpKFs[0]:"<< vpKFs[0]->mnId <<"\n";
+
+    for(std::vector< ::ORB_SLAM2::KeyFrame* >::iterator it = vpKFs.begin(); it != vpKFs.end(); ++it)
+    {
+        /** Get the transformation world to keyframe **/
+        cv::Mat Tcw = (*it)->GetPose()*Two;
+        cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+        cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+
+        /** ORB_SLAM2 quaternion is x, y, z, w and Eigen quaternion is w, x, y, z **/
+        std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+        Eigen::Affine3d tf_pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
+
+        /** Update the transformation in the envire graph **/
+        std::string frame_id = std::to_string((*it)->mnId);
+        envire::core::Transform envire_tf = this->envire_graph.getTransform(this->first_kf_id, frame_id);
+        envire_tf.setTransform(::base::TransformWithCovariance(tf_pose));
+        this->envire_graph.updateTransform(this->first_kf_id, frame_id, envire_tf);
+    }
+
+}
+
+void Task::mergePointClouds(PCLPointCloud &map_point_cloud)
+{
+    map_point_cloud.clear();
+
+    std::cout<<"[ORB_SLAM2 MERGE POINT CLOUDS]:\n";
+
+    /** Merge the point cloud **/
+    std::pair<envire::core::EnvireGraph::vertex_iterator, envire::core::EnvireGraph::vertex_iterator> vp;
+    for (vp = this->envire_graph.getVertices(); vp.first != vp.second; ++vp.first)
+    {
+        std::string frame_id = this->envire_graph.getFrameId(*(vp.first));
+        std::cout<<"id: "<<frame_id<<" ";
+
+        if (this->envire_graph.containsItems<orb_slam2::PointCloudItem>(frame_id))
+        {
+            PCLPointCloud local_points = this->getPointCloud(frame_id);
+            base::TransformWithCovariance tf_cov = this->envire_graph.getTransform(this->first_kf_id, frame_id).transform;
+            this->transformPointCloud(local_points, tf_cov.getTransform());
+            map_point_cloud += local_points;
+            std::cout<<"local_points.size(); "<<local_points.size()<<"\n";
+        }
+    }
+
+    /** Downsample the map point cloud **/
+    PCLPointCloudPtr map_point_cloud_ptr = boost::make_shared<PCLPointCloud>(map_point_cloud);
+    PCLPointCloudPtr downsample_point_cloud (new PCLPointCloud);
+    this->downsample (map_point_cloud_ptr, _map_point_cloud_resolution.value(), downsample_point_cloud);
+
+    map_point_cloud = *downsample_point_cloud;
+    downsample_point_cloud.reset();
+    return;
+}
+
 

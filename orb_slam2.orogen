@@ -20,6 +20,7 @@ using_library "ORB_SLAM2"
 using_library "envire_core"
 using_library "frame_helper"
 using_library "pcl_common-1.7"
+using_library "pcl_filters-1.7"
 using_library "pcl_io-1.7"
 
 # If this project uses data types that are defined in other oroGen projects,
@@ -72,6 +73,9 @@ task_context "Task" do
     #*******************************
     #**** Dense Map Properties *****
     #*******************************
+    property('map_point_cloud_resolution', 'base::Vector3d').
+        doc 'Point cloud resolution of the combined point clouds.'
+
     property("output_ply", "/std/string", "").
         doc "resulting ply file"
 
