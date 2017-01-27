@@ -251,7 +251,7 @@ namespace orb_slam2
         /** @brief Combine all the point clouds stored in the envire_graph and
          * merge them into a single point cloud.
          */
-        void mergePointClouds(PCLPointCloud &merged_point_cloud);
+        void mergePointClouds(PCLPointCloudPtr &merged_point_cloud);
 
     public:
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW;

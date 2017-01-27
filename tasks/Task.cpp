@@ -141,16 +141,14 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
 
 void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> &point_cloud_samples_sample)
 {
-
-    #ifdef DEBUG_PRINTS
-    std::cout<< "[ORB_SLAM2 POINT_CLOUD] Point cloud arrived at: "<<point_cloud_samples_sample.time.toString()<<std::endl;
-    #endif
-
     /** Convert to pcl point clouds **/
     pcl::fromPCLPointCloud2(point_cloud_samples_sample.data, *keyframe_point_cloud.get());
+    #ifdef DEBUG_PRINTS
+    std::cout<< "[ORB_SLAM2 POINT_CLOUD] Point cloud arrived at: "<<point_cloud_samples_sample.time.toString()<<std::endl;
     std::cout<<"keyframe_point_cloud->width: "<< keyframe_point_cloud->width<<"\n";
     std::cout<<"keyframe_point_cloud->height: "<< keyframe_point_cloud->height<<"\n";
     std::cout<<"keyframe_point_cloud->size: "<< keyframe_point_cloud->size()<<"\n";
+    #endif
 
     /** Current KF transformation **/
     g2o::SE3Quat se3_kf_nav = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->getLastKeyFramePose());
@@ -178,9 +176,6 @@ bool Task::configureHook()
 
     /** Frame index **/
     this->frame_idx = 0;
-
-    std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
-    std::cout<<"[CONFIGURATION ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
 
     /** Initial need to compute a frame is true **/
     this->flag_process_frame = true;
@@ -278,6 +273,16 @@ void Task::errorHook()
 void Task::stopHook()
 {
     TaskBase::stopHook();
+
+    /** Create the map point cloud **/
+    this->mergePointClouds(this->merge_point_cloud);
+
+    /** Save the map point cloud to file **/
+    pcl::io::savePLYFileBinary (_output_ply.value(), *merge_point_cloud.get());
+
+    /** Save envire_graph dot image **/
+    envire::core::GraphViz viz;
+    viz.write(this->envire_graph, "envire_graph_orb_slam2_graphviz.dot");
 }
 
 void Task::cleanupHook()
@@ -289,16 +294,6 @@ void Task::cleanupHook()
 
     /** Save the all frames trajectory in text format (translation + heading) **/
     this->saveAllTrajectoryText("orb_slam2_allframes_trajectory.data");
-
-    /** Save envire_graph dot image **/
-    envire::core::GraphViz viz;
-    viz.write(this->envire_graph, "envire_graph_orb_slam2_graphviz.dot");
-
-    /** Create the map point cloud **/
-    this->mergePointClouds(*merge_point_cloud.get());
-
-    /** Save the map point cloud to file **/
-    pcl::io::savePLYFileBinary (_output_ply.value(), *merge_point_cloud.get());
 
     /** Reset keyframe trajectory out port**/
     this->keyframes_trajectory.clear();
@@ -416,13 +411,11 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     {
         /** Get frame id **/
         std::string frame_id = std::to_string(this->slam->mpTracker->getLastKeyFrameId());
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] Frame_id: "<< frame_id <<"\n";
 
         if (this->envire_graph.num_vertices() ==  0)
         {
             /** Store the name of the first Keyframe **/
             this->first_kf_id = frame_id;
-            std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] FIRST_KEYFRAME_ID: "<< this->first_kf_id <<"\n";
         }
 
         /** Add frame in envire graph **/
@@ -432,7 +425,6 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         envire::core::Transform tf(timestamp, ::base::TransformWithCovariance(this->keyframe_pose_out.getTransform()));
         this->envire_graph.addTransform(this->first_kf_id, frame_id, tf);
 
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] PUSH merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
 
         if (this->merge_point_cloud->size() > 0)
         {
@@ -442,8 +434,10 @@ void Task::process(const base::samples::frame::Frame &frame_left,
             this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
         }
 
+        #ifdef DEBUG_PRINTS
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_vertices: "<< this->envire_graph.num_vertices() <<"\n";
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
+        #endif
 
         /** Write the point cloud into the port **/
         ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> point_cloud_out;
@@ -453,11 +447,10 @@ void Task::process(const base::samples::frame::Frame &frame_left,
 
         /** Clear accumulated point cloud in key frame **/
         this->merge_point_cloud->clear();
-        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] CLEAN merge_point_cloud.size(): "<< this->merge_point_cloud->size() <<"\n";
-    }
 
-    /** Update the envire graph with the optimized transformation values **/
-    this->updateEnvireGraph(Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+        /** Update the envire graph with the optimized transformation values **/
+        this->updateEnvireGraph(Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    }
 
     /** Write in the slam information port **/
     this->info.time = timestamp;
@@ -639,7 +632,7 @@ void Task::getMapPointsPose( ::base::samples::Pointcloud &points_map,  const Eig
 }
 void Task::saveKFTrajectoryText(const string &filename, const Eigen::Affine3d &tf)
 {
-    std::cout << std::endl << "Saving camera trajectory to " << filename << " ..." << std::endl;
+    std::cout << std::endl << "[ORB_SLAM2] Saving camera trajectory to " << filename << " ..." << std::endl;
 
     std::ofstream f;
     f.open(filename.c_str());
@@ -659,7 +652,7 @@ void Task::saveKFTrajectoryText(const string &filename, const Eigen::Affine3d &t
 
 void Task::saveAllTrajectoryText(const string &filename, const Eigen::Affine3d &tf)
 {
-    std::cout << std::endl << "Saving camera trajectory to " << filename << " ..." << std::endl;
+    std::cout << std::endl << "[ORB_SLAM2] Saving camera trajectory to " << filename << " ..." << std::endl;
 
     std::ofstream f;
     f.open(filename.c_str());
@@ -717,14 +710,14 @@ PCLPointCloud &Task::getPointCloud(const std::string &frame_id)
 
 void Task::updateEnvireGraph(const Eigen::Affine3d &tf)
 {
+    #ifdef DEBUG_PRINTS
     std::cout<<"[ORB_SLAM2 UPDATE ENVIRE_GRAPH]:\n";
+    #endif
 
     /** Update the envire_graph transformation **/
     std::vector< ::ORB_SLAM2::KeyFrame* > vpKFs = this->slam->mpMap->GetAllKeyFrames();
     std::sort(vpKFs.begin(),vpKFs.end(), ::ORB_SLAM2::KeyFrame::lId);
     cv::Mat Two = vpKFs[0]->GetPoseInverse();
-
-    std::cout<<"first_kf_id:"<<this->first_kf_id<<" vpKFs[0]:"<< vpKFs[0]->mnId <<"\n";
 
     for(std::vector< ::ORB_SLAM2::KeyFrame* >::iterator it = vpKFs.begin(); it != vpKFs.end(); ++it)
     {
@@ -746,35 +739,36 @@ void Task::updateEnvireGraph(const Eigen::Affine3d &tf)
 
 }
 
-void Task::mergePointClouds(PCLPointCloud &map_point_cloud)
+void Task::mergePointClouds(PCLPointCloudPtr &map_point_cloud)
 {
-    map_point_cloud.clear();
-
-    std::cout<<"[ORB_SLAM2 MERGE POINT CLOUDS]:\n";
+    map_point_cloud->clear();
 
     /** Merge the point cloud **/
     std::pair<envire::core::EnvireGraph::vertex_iterator, envire::core::EnvireGraph::vertex_iterator> vp;
     for (vp = this->envire_graph.getVertices(); vp.first != vp.second; ++vp.first)
     {
         std::string frame_id = this->envire_graph.getFrameId(*(vp.first));
-        std::cout<<"id: "<<frame_id<<" ";
 
         if (this->envire_graph.containsItems<orb_slam2::PointCloudItem>(frame_id))
         {
             PCLPointCloud local_points = this->getPointCloud(frame_id);
             base::TransformWithCovariance tf_cov = this->envire_graph.getTransform(this->first_kf_id, frame_id).transform;
             this->transformPointCloud(local_points, tf_cov.getTransform());
-            map_point_cloud += local_points;
-            std::cout<<"local_points.size(); "<<local_points.size()<<"\n";
+            *map_point_cloud += local_points;
         }
     }
 
-    /** Downsample the map point cloud **/
-    PCLPointCloudPtr map_point_cloud_ptr = boost::make_shared<PCLPointCloud>(map_point_cloud);
-    PCLPointCloudPtr downsample_point_cloud (new PCLPointCloud);
-    this->downsample (map_point_cloud_ptr, _map_point_cloud_resolution.value(), downsample_point_cloud);
+    #ifdef DEBUG_PRINTS
+    std::cout<<"[ORB_SLAM2 MERGE POINT CLOUDS]:\n";
+    std::cout<<"map_point_cloud.size(); "<<map_point_cloud->size()<<"\n";
+    #endif
 
-    map_point_cloud = *downsample_point_cloud;
+    /** Downsample the map point cloud **/
+    PCLPointCloudPtr downsample_point_cloud (new PCLPointCloud);
+    this->downsample (map_point_cloud, _map_point_cloud_resolution.value(), downsample_point_cloud);
+    map_point_cloud->clear();
+
+    *map_point_cloud = *downsample_point_cloud;
     downsample_point_cloud.reset();
     return;
 }
