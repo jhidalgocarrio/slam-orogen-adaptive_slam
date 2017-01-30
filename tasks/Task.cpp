@@ -358,8 +358,8 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
     else if (!_navigation2world.get(timestamp, tf_world_nav, false))
     {
-        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR]  No transformation provided."<<RTT::endlog();
-       return;
+        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR]  No transformation "<< _world_frame.value() << "-> "<<_navigation_frame.value()<<" provided."<<RTT::endlog();
+        return;
     }
 
     Eigen::Affine3d tf_body_sensor; /** Transformer transformation **/
@@ -370,8 +370,8 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
     else if (!_sensor2body.get(timestamp, tf_body_sensor, false))
     {
-        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR] No transformation provided."<<RTT::endlog();
-       return;
+        RTT::log(RTT::Fatal)<<"[ORB_SLAM2 FATAL ERROR]  No transformation "<< _body_frame.value() << "-> "<<_sensor_frame.value()<<" provided."<<RTT::endlog();
+        return;
     }
 
     /** Get the camera pose from ORB_SLAM2 **/
@@ -730,11 +730,27 @@ void Task::updateEnvireGraph(const Eigen::Affine3d &tf)
         std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
         Eigen::Affine3d tf_pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
 
-        /** Update the transformation in the envire graph **/
-        std::string frame_id = std::to_string((*it)->mnId);
-        envire::core::Transform envire_tf = this->envire_graph.getTransform(this->first_kf_id, frame_id);
-        envire_tf.setTransform(::base::TransformWithCovariance(tf_pose));
-        this->envire_graph.updateTransform(this->first_kf_id, frame_id, envire_tf);
+        try
+        {
+            /** Update the transformation in the envire graph **/
+            std::string frame_id = std::to_string((*it)->mnId);
+            envire::core::Transform envire_tf = this->envire_graph.getTransform(this->first_kf_id, frame_id);
+            envire_tf.setTransform(::base::TransformWithCovariance(tf_pose));
+            this->envire_graph.updateTransform(this->first_kf_id, frame_id, envire_tf);
+
+        }
+        catch (envire::core::UnknownEdgeException &ufex)
+        {
+            std::cerr << ufex.what() << std::endl;
+        }
+        catch (envire::core::UnknownFrameException &ufex)
+        {
+            std::cerr << ufex.what() << std::endl;
+        }
+        catch (envire::core::UnknownTransformException &ufex)
+        {
+            std::cerr << ufex.what() << std::endl;
+        }
     }
 
 }
