@@ -79,6 +79,10 @@ task_context "Task" do
     property("output_ply", "/std/string", "").
         doc "resulting ply file"
 
+    property('map_conditional_removal_config', 'pituki/ConditionalRemovalConfiguration').
+        doc 'Configuration parameters for the conditional removal filter applied to map.'
+
+
     #******************************
     #******* Input ports  *********
     #******************************
