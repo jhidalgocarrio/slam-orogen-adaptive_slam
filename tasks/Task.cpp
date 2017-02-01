@@ -8,8 +8,9 @@
 /** PCL **/
 #include <pcl/conversions.h>
 #include <pcl/io/ply_io.h>
+#include <pcl/filters/conditional_removal.h>
 
-#define DEBUG_PRINTS 1
+//#define DEBUG_PRINTS 1
 
 #ifndef D2R
 #define D2R M_PI/180.00 /** Convert degree to radian **/
@@ -150,18 +151,14 @@ void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::
     std::cout<<"keyframe_point_cloud->size: "<< keyframe_point_cloud->size()<<"\n";
     #endif
 
-    /** Current KF transformation **/
-    g2o::SE3Quat se3_kf_nav = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->getLastKeyFramePose());
-
-    Eigen::Affine3d tf_kf_cf(se3_kf_nav.rotation()); // Transformation from last keyframe to sensor frame
-    tf_kf_cf.translation() = se3_kf_nav.translation();
-    tf_kf_cf = tf_kf_cf * this->tf_nav_orb_sensor;
+    /** Current KF to current frame transformation **/
+    Eigen::Affine3d tf_kf_cf = this->tf_nav_keyframe.inverse() * this->tf_nav_orb_sensor;
 
     /** Transform the point cloud in keyframe frame **/
     this->transformPointCloud(*keyframe_point_cloud, tf_kf_cf);
 
     /** Accumulate the cloud points **/
-    *merge_point_cloud += *keyframe_point_cloud;
+    *merge_point_cloud = *keyframe_point_cloud;
     keyframe_point_cloud->clear();
 }
 
@@ -195,8 +192,15 @@ bool Task::configureHook()
     /** Set Tsensor_sensor(k-1) from odometry to Nan **/
     this->tf_odo_sensor_sensor_1.matrix()= Eigen::Matrix<double, 4, 4>::Zero() * base::NaN<double>();
 
-    /** Set Tsensor(k-1)_sensor from ORB_SLAM2  to Identity*/
+    /** Set Tsensor(0)_sensor from ORB_SLAM2  to Identity*/
     this->tf_nav_orb_sensor.setIdentity();
+
+    /** Set Tsensor(0)_kf from ORB_SLAM2 to Identity*/
+    this->tf_nav_keyframe.setIdentity();
+
+    /** Set Tworld_sensor to Identity (it will set by transformer
+     * transfomations) **/
+    this->tf_world_sensor.setIdentity();
 
     /** Optimized Output port **/
     this->slam_pose_out.invalidate();
@@ -274,8 +278,16 @@ void Task::stopHook()
 {
     TaskBase::stopHook();
 
+    /** Update the envire graph with the optimized transformation values **/
+     this->updateEnvireGraph(this->tf_world_sensor);
+
     /** Create the map point cloud **/
     this->mergePointClouds(this->merge_point_cloud);
+
+    /** Write the point cloud into the port **/
+    ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> point_cloud_out;
+    pcl::toPCLPointCloud2(*merge_point_cloud.get(), point_cloud_out.data);
+    _point_cloud_samples_out.write(point_cloud_out);
 
     /** Save the map point cloud to file **/
     pcl::io::savePLYFileBinary (_output_ply.value(), *merge_point_cloud.get());
@@ -330,7 +342,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     /** ORB_SLAM2 **/
     this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model);
 
-    /** Set insert frame to false **/
+    /** Set insert frame to true **/
     this->flag_process_frame = true;
 
     /** Left color image **/
@@ -380,12 +392,13 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         g2o::SE3Quat se3_nav_sensor = ORB_SLAM2::Converter::toSE3Quat(this->slam->mpTracker->mCurrentFrame.mTcw).inverse();
 
         /** SE3 to Affine3d **/
-       this->tf_nav_orb_sensor = se3_nav_sensor.rotation();
-       this->tf_nav_orb_sensor.translation() = se3_nav_sensor.translation();
+        this->tf_nav_orb_sensor = se3_nav_sensor.rotation();
+        this->tf_nav_orb_sensor.translation() = se3_nav_sensor.translation();
     }
 
     /** Tworld_body = Tworld_body * Tbody_sensor * Tsensor(k-1)_sensor * Tsensor_body **/
-    Eigen::Affine3d tf_world_body = tf_world_nav * tf_body_sensor * this->tf_nav_orb_sensor * tf_body_sensor.inverse();
+    this->tf_world_sensor = Eigen::Affine3d(tf_world_nav * tf_body_sensor);
+    Eigen::Affine3d tf_world_body = this->tf_world_sensor * this->tf_nav_orb_sensor * tf_body_sensor.inverse();
 
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
@@ -393,7 +406,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     _pose_samples_out.write(this->slam_pose_out);
 
     /** Get the trajectory of key frames **/
-    this->getFramesPose(this->keyframes_trajectory, this->allframes_trajectory, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
+    this->getFramesPose(this->keyframes_trajectory, this->allframes_trajectory, this->tf_world_sensor);
     _keyframes_trajectory_out.write(this->keyframes_trajectory);
     _allframes_trajectory_out.write(this->allframes_trajectory);
 
@@ -432,6 +445,9 @@ void Task::process(const base::samples::frame::Frame &frame_left,
             PointCloudItem::Ptr point_cloud_item(new PointCloudItem);
             point_cloud_item->setData(*(this->merge_point_cloud));
             this->envire_graph.addItemToFrame(frame_id, point_cloud_item);
+
+            /** Clear accumulated point cloud in key frame **/
+            this->merge_point_cloud->clear();
         }
 
         #ifdef DEBUG_PRINTS
@@ -439,17 +455,18 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] num_edges: "<< this->envire_graph.num_edges() <<"\n";
         #endif
 
+        std::cout<<"[ORB_SLAM2 PROCESS ENVIRE_GRAPH] PORTING OUT POINT CLOUD\n";
+
+        /** Update the envire graph with the optimized transformation values **/
+        this->updateEnvireGraph(this->tf_world_sensor);
+
+        this->mergePointClouds(this->merge_point_cloud);
+
         /** Write the point cloud into the port **/
         ::envire::core::SpatioTemporal<pcl::PCLPointCloud2> point_cloud_out;
         pcl::toPCLPointCloud2(*merge_point_cloud.get(), point_cloud_out.data);
         point_cloud_out.time = timestamp;
         _point_cloud_samples_out.write(point_cloud_out);
-
-        /** Clear accumulated point cloud in key frame **/
-        this->merge_point_cloud->clear();
-
-        /** Update the envire graph with the optimized transformation values **/
-        this->updateEnvireGraph(Eigen::Affine3d(tf_world_nav * tf_body_sensor));
     }
 
     /** Write in the slam information port **/
@@ -462,9 +479,11 @@ void Task::process(const base::samples::frame::Frame &frame_left,
 
 void Task::needFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
 {
+    #ifdef DEBUG_PRINTS
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] SUM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.sum() <<"\n";
+    #endif
     double residual = delta_pose_samples.cov_velocity.norm();
     unsigned short new_computing_counts;
 
@@ -472,18 +491,18 @@ void Task::needFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
     {
         /** Smaller than threshold reduce the frequency **/
         new_computing_counts = boost::math::iround(2.0 * _desired_period.value()/_left_frame_period.value());
-        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
     }
     else if (residual > 2.0 * _velocity_residual_threshold.value())
     {
         /** Bigger than double the threshold reduce the frequency **/
         new_computing_counts = boost::math::iround(0.3 * _desired_period.value()/_left_frame_period.value());
-        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
     }
     else
     {
         new_computing_counts = boost::math::iround(_desired_period.value()/_left_frame_period.value());
-        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
     }
 
     if (this->flag_process_frame)
@@ -491,13 +510,13 @@ void Task::needFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
         /** Frame has been processed **/
         this->flag_process_frame = false;
         this->computing_counts = new_computing_counts;
-        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
+        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
     }
     else if (new_computing_counts < this->computing_counts)
     {
         /** KeyFrame has been processed **/
         this->computing_counts = new_computing_counts;
-        std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, BECAUSE SMALLER!!\n";
+        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, BECAUSE SMALLER!!\n";
     }
     return;
 }
@@ -526,7 +545,10 @@ void Task::getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::v
 
         /** ORB_SLAM2 quaternion is x, y, z, w and Eigen quaternion is w, x, y, z **/
         std::vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
-        ::base::Pose pose (tf * ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform());
+        this->tf_nav_keyframe = ::base::Pose(ORB_SLAM2::Converter::toVector3d(twc), ::base::Orientation(q[3], q[0], q[1], q[2])).toTransform();
+
+        /** pose into the task world frame **/
+        ::base::Pose pose (tf * this->tf_nav_keyframe);
 
         this->keyframe_pose_out.setTransform(pose.toTransform());
     }
@@ -784,9 +806,49 @@ void Task::mergePointClouds(PCLPointCloudPtr &map_point_cloud)
     this->downsample (map_point_cloud, _map_point_cloud_resolution.value(), downsample_point_cloud);
     map_point_cloud->clear();
 
-    *map_point_cloud = *downsample_point_cloud;
+    /** Conditional Removal in map **/
+    if (_map_conditional_removal_config.value().filter_on)
+    {
+        this->conditionalRemoval(downsample_point_cloud, _map_conditional_removal_config.value(), map_point_cloud);
+    }
+    else
+    {
+        *map_point_cloud = *downsample_point_cloud;
+    }
+
     downsample_point_cloud.reset();
     return;
 }
 
+void Task::conditionalRemoval(const PCLPointCloudPtr &points, const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out)
+{
+    /** Clean the out point cloud **/
+    outliersampled_out->clear();
+
+    /**  build the condition **/
+    pcl::ConditionAnd<PointType>::Ptr range_cond (new
+      pcl::ConditionAnd<PointType> ());
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::GT, config.gt_boundary[0])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("x", pcl::ComparisonOps::LT, config.lt_boundary[0])));
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::GT, config.gt_boundary[1])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("y", pcl::ComparisonOps::LT, config.lt_boundary[1])));
+
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::GT, config.gt_boundary[2])));
+    range_cond->addComparison (pcl::FieldComparison<PointType>::ConstPtr (new
+      pcl::FieldComparison<PointType> ("z", pcl::ComparisonOps::LT, config.lt_boundary[2])));
+
+    /** Apply the condition filter **/
+    pcl::ConditionalRemoval<PointType> condrem;
+    condrem.setCondition (range_cond);
+    condrem.setInputCloud (points);
+    condrem.setKeepOrganized(config.keep_organized);
+    condrem.filter (*outliersampled_out);
+}
 

@@ -95,8 +95,11 @@ namespace orb_slam2
 
         Eigen::Affine3d tf_odo_sensor_sensor_1; // Relative camera transformations from delta_poses Tsensor(k)_sensor(k-1)
 
-        Eigen::Affine3d tf_nav_orb_sensor; //Relative camera transformation from ORB_SLAM2 Tsensor(k-1)_sensor(k)
+        Eigen::Affine3d tf_nav_orb_sensor; //Relative camera transformation from origin of ORB_SLAM to current frame
 
+        Eigen::Affine3d tf_world_sensor; //Camera transformation from world to the sensor( required for the updateEnvireGraph method outside of updateHook)
+
+        Eigen::Affine3d tf_nav_keyframe; //Keyframe transformation from origin of ORB_SLAM to last keyframe
 
         std::string first_kf_id;
 
@@ -252,6 +255,10 @@ namespace orb_slam2
          * merge them into a single point cloud.
          */
         void mergePointClouds(PCLPointCloudPtr &merged_point_cloud);
+
+        /** @brief Conditional removal for the resulting map point cloud
+         */
+        void conditionalRemoval(const PCLPointCloudPtr &points,const pituki::ConditionalRemovalConfiguration &config, PCLPointCloudPtr &outliersampled_out);
 
     public:
         EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
