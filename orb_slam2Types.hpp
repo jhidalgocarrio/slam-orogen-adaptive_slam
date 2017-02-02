@@ -26,7 +26,9 @@ namespace orb_slam2
         base::Time time; //time-stamp
         int number_relocalizations;
         int number_loops;
+        int images_computing_counts;
         float fps;
+        double gp_residual;
     };
 }
 
