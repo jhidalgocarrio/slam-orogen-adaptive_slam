@@ -97,11 +97,11 @@ namespace orb_slam2
 
         Eigen::Affine3d tf_nav_orb_sensor; //Relative camera transformation from origin of ORB_SLAM to current frame
 
-        Eigen::Affine3d tf_world_sensor; //Camera transformation from world to the sensor( required for the updateEnvireGraph method outside of updateHook)
+        Eigen::Affine3d tf_world_sensor_0; //Camera transformation from world to the sensor( required for the updateEnvireGraph method outside of updateHook)
 
         Eigen::Affine3d tf_nav_keyframe; //Keyframe transformation from origin of ORB_SLAM to last keyframe
 
-        std::string first_kf_id;
+        std::string first_kf_id, current_kf_id;
 
         envire::core::EnvireGraph envire_graph; // The map in a graph structure
 
@@ -249,12 +249,12 @@ namespace orb_slam2
 
         /** brief Update the envire graph transformations
          */
-        void updateEnvireGraph(const Eigen::Affine3d &tf);
+        void updateEnvireGraph();
 
         /** @brief Combine all the point clouds stored in the envire_graph and
          * merge them into a single point cloud.
          */
-        void mergePointClouds(PCLPointCloudPtr &merged_point_cloud);
+        void mergePointClouds(const Eigen::Affine3d &tf, PCLPointCloudPtr &merged_point_cloud);
 
         /** @brief Conditional removal for the resulting map point cloud
          */
