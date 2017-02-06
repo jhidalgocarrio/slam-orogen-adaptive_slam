@@ -51,15 +51,18 @@ task_context "Task" do
         doc 'Frame of the slam pose (normally sensor frame or body frame)'
 
     property('keyframe_samples_out_source_frame', '/std/string').
-        doc 'Last key frame pose of the slam (normally "last_kf")'+
+        doc 'Last key frame pose of the slam (normally named "last_kf")'+
             'The slam localization target frame is taken from the world frame of the transformer.'
 
-    property("desired_period", "double").
-        doc "Period to compute the image processing step in seconds. It cannot be higher than the input port period."+
-            "In case of zero the period will be set to the input port period."
+    property("minimum_frame_period", "double").
+        doc "Minimum period to adaptively compute the image processing step in seconds. It cannot be smaller than the input port period."+
+            "In case of a period equal to zero. The period is set to the input port period and no adaptive computation of images frames is selected."
 
-    property("velocity_residual_threshold", "double").
-        doc "Velocity residual in [m/s] threshold for the odometry estimation."
+    property("gaussian_process_residual_boundary", "base::Vector2d").
+        doc "Minimum (vector[0]) and Maximum (vector[1]) expected GP residual."
+
+    property('error_residual_threshold', 'double').
+        doc 'Unit error (0 - 1) for odometry velocity estimation [m/s].'
 
     #*******************************
     #**** ORB-SLAM2 Properties *****

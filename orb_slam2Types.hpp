@@ -27,8 +27,11 @@ namespace orb_slam2
         int number_relocalizations;
         int number_loops;
         int images_computing_counts;
-        float fps;
-        double gp_residual;
+        float desired_fps;
+        float actual_fps;
+        double frame_gp_residual;
+        double kf_gp_residual;
+        double kf_gp_threshold;
     };
 }
 
