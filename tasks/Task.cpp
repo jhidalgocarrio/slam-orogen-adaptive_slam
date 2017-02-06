@@ -10,6 +10,9 @@
 #include <pcl/io/ply_io.h>
 #include <pcl/filters/conditional_removal.h>
 
+#include <math.h> //pow function
+#include <algorithm> //std::max
+
 //#define DEBUG_PRINTS 1
 
 #ifndef D2R
@@ -65,13 +68,28 @@ void Task::delta_pose_samplesTransformerCallback(const base::Time &ts, const ::b
         this->tf_odo_sensor_sensor_1.setIdentity();
     }
 
+    /** Increase the computing index **/
+    this->delta_pose_idx++;
+
     /** Accumulate the relative sensor to sensor transformation Tsensor_sensor(k-1) **/
     Eigen::Affine3d tf_body_body = delta_pose_samples_sample.getTransform();
     this->tf_odo_sensor_sensor_1 = this->tf_odo_sensor_sensor_1 * (tf_body_sensor.inverse() * tf_body_body.inverse() * tf_body_sensor);
 
-    /** Need to compute a key frame image **/
-    if ( this->slam->mpTracker->mState == ORB_SLAM2::Tracking::OK || this->slam->mpTracker->mState == ORB_SLAM2::Tracking::LOST)
-        this->needFrame(delta_pose_samples_sample);
+    if (_minimum_frame_period.value() != _left_frame_period.value())
+    {
+        /** Update image frame adaptive frequency **/
+        this->updateFrameFrequency(delta_pose_samples_sample);
+
+        /** Update fps into the ORB_SLAM2 backend **/
+        this->slam->mpTracker->setNewFPS(this->info.actual_fps);
+    }
+
+    /** Accumulate the gaussian process residual **/
+    this->delta_residual += delta_pose_samples_sample.cov_velocity.norm();
+
+    /** Port out task infor **/
+    this->info.time = delta_pose_samples_sample.time;
+    _task_info_out.write(this->info);
 }
 
 void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extras::ReadOnlyPointer< ::base::samples::frame::Frame > &left_frame_sample)
@@ -81,26 +99,30 @@ void Task::left_frameTransformerCallback(const base::Time &ts, const ::RTT::extr
     #endif
 
     /** The image need to be in gray scale and undistorted **/
-    frame_pair.first.init(left_frame_sample->size.width, left_frame_sample->size.height, left_frame_sample->getDataDepth(), base::samples::frame::MODE_GRAYSCALE);
-    frameHelperLeft.convert (*left_frame_sample, frame_pair.first, 0, 0, _resize_algorithm.value(), true);
+    this->frame_pair.first.init(left_frame_sample->size.width, left_frame_sample->size.height, left_frame_sample->getDataDepth(), base::samples::frame::MODE_GRAYSCALE);
+    frameHelperLeft.convert (*left_frame_sample, this->frame_pair.first, 0, 0, _resize_algorithm.value(), true);
 
     /** Increase the computing index **/
     this->left_computing_idx++;
 
     /** If the difference in time is less than half of a period run the tracking **/
-    base::Time diffTime = frame_pair.first.time - frame_pair.second.time;
+    base::Time diffTime = this->frame_pair.first.time - this->frame_pair.second.time;
 
     /** If the difference in time is less than half of a period run the tracking **/
     if (diffTime.toSeconds() < (_left_frame_period/2.0) && (this->left_computing_idx >= this->computing_counts))
     {
-        frame_pair.time = frame_pair.first.time;
+        /** Update the delta time between frames **/
+        this->delta_frame_time = this->frame_pair.second.time - this->frame_pair.time;
+
+        /** Update the current time **/
+        this->frame_pair.time = this->frame_pair.first.time;
 
         #ifdef DEBUG_PRINTS
         std::cout<< "[ORB_SLAM2 LEFT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
 
         /** Process the images with ORB_SLAM2 **/
-        this->process(frame_pair.first, frame_pair.second, frame_pair.time);
+        this->process(this->frame_pair.first, this->frame_pair.second, this->frame_pair.time);
 
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
@@ -114,26 +136,30 @@ void Task::right_frameTransformerCallback(const base::Time &ts, const ::RTT::ext
     #endif
 
     /** Correct distortion in image right **/
-    frame_pair.second.init(right_frame_sample->size.width, right_frame_sample->size.height, right_frame_sample->getDataDepth(), base::samples::frame::MODE_GRAYSCALE);
-    frameHelperRight.convert (*right_frame_sample, frame_pair.second, 0, 0, _resize_algorithm.value(), true);
+    this->frame_pair.second.init(right_frame_sample->size.width, right_frame_sample->size.height, right_frame_sample->getDataDepth(), base::samples::frame::MODE_GRAYSCALE);
+    frameHelperRight.convert (*right_frame_sample, this->frame_pair.second, 0, 0, _resize_algorithm.value(), true);
 
-    /** Increase th computing index **/
+    /** Increase the computing index **/
     this->right_computing_idx++;
 
     /** Check the time difference **/
-    base::Time diffTime = frame_pair.second.time - frame_pair.first.time;
+    base::Time diffTime = this->frame_pair.second.time - this->frame_pair.first.time;
 
     /** If the difference in time is less than half of a period run the tracking **/
     if (diffTime.toSeconds() < (_right_frame_period/2.0) && (this->right_computing_idx >= this->computing_counts))
     {
-        frame_pair.time = frame_pair.second.time;
+        /** Update the delta time between frames **/
+        this->delta_frame_time = this->frame_pair.second.time - this->frame_pair.time;
+
+        /** Update the current time **/
+        this->frame_pair.time = this->frame_pair.second.time;
 
         #ifdef DEBUG_PRINTS
         std::cout<< "[ORB_SLAM2 RIGHT_FRAME] [ON] ("<<diffTime.toMicroseconds()<<")\n";
         #endif
 
         /** Process the images with ORB_SLAM2 **/
-        this->process(frame_pair.first, frame_pair.second, frame_pair.time);
+        this->process(this->frame_pair.first, this->frame_pair.second, this->frame_pair.time);
 
         /** Reset computing indices **/
         this->left_computing_idx = this->right_computing_idx = 0;
@@ -173,6 +199,8 @@ bool Task::configureHook()
 
     /** Frame index **/
     this->frame_idx = 0;
+
+    this->delta_residual = 0.00;
 
     /** Initial need to compute a frame is true **/
     this->flag_process_frame = true;
@@ -235,24 +263,33 @@ bool Task::configureHook()
         throw std::runtime_error("[ORB_SLAM2] Input port period in Left and Right images must be equal!");
     }
 
-    if (_desired_period.value() < _left_frame_period.value())
+    if (_minimum_frame_period.value() == 0.00)
     {
-        throw std::runtime_error("[ORB_SLAM2] Desired period cannot be smaller than input ports period!");
-    }
-    else if (_desired_period.value() == 0.00)
-    {
-        _desired_period.value() = _left_frame_period.value();
-        this->computing_counts = 1;
-    }
-    else
-    {
-        this->computing_counts = boost::math::iround(_desired_period.value()/_left_frame_period.value());
-        _desired_period.value() = this->computing_counts * _left_frame_period.value();
+        _minimum_frame_period.value() = _left_frame_period.value();
     }
 
-    RTT::log(RTT::Warning)<<"[ORB_SLAM2] Actual Computing Period: "<<_desired_period.value()<<" [seconds]"<<RTT::endlog();
+    if (_minimum_frame_period.value() < _left_frame_period.value())
+    {
+        throw std::runtime_error("[ORB_SLAM2] Minimum frame period cannot be smaller than input ports period!");
+    }
 
+    RTT::log(RTT::Warning)<<"[ORB_SLAM2] Minimum frame period: "<<_minimum_frame_period.value()<<" [seconds]"<<RTT::endlog();
+    if(_minimum_frame_period.value() == _left_frame_period.value())
+    {
+        RTT::log(RTT::Warning)<<"[ORB_SLAM2] NO Adaptive image frame processing"<<RTT::endlog();
+    }
+
+    /** Initialize frame counters **/
     this->left_computing_idx = this->right_computing_idx = 0;
+
+    /** Initialize delta_pose counters **/
+    this->delta_pose_idx = 0;
+
+    /** Default computing counts **/
+    this->info.images_computing_counts = this->computing_counts = 1;
+    this->info.desired_fps = this->info.actual_fps = (1.0/_left_frame_period.value());
+    this->info.frame_gp_residual = this->info.kf_gp_residual = 0.00;
+    this->info.kf_gp_threshold = 0.00;
 
     return true;
 }
@@ -328,6 +365,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
 
     /** Check whether there is delta pose in camera frame from motion model **/
     cv::Mat tf_motion_model;
+    bool flag_insert_new_keyframe = false;
     if (base::isnotnan(this->tf_odo_sensor_sensor_1.matrix()))
     {
         //std::cout<<"[ORB_SLAM2 PROCESS] TF_ODO_SENSOR_SENSOR_1:\n"<< this->tf_odo_sensor_sensor_1.matrix() <<"\n";
@@ -335,12 +373,17 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         /** ORB_SLAM2 with motion model information **/
         tf_motion_model = ORB_SLAM2::Converter::toCvMat(this->tf_odo_sensor_sensor_1.matrix());
 
+        this->delta_residual = this->delta_residual / this->delta_pose_idx;
+
+        flag_insert_new_keyframe = this->needKeyFrame(this->tf_odo_sensor_sensor_1, this->delta_frame_time, this->delta_residual);
+        std::cout<<"[ORB_SLAM2 PROCESS] flag_insert_new_keyframe: "<< flag_insert_new_keyframe <<"\n";
+
         /** Reset the Tsensor(k)_sensor(k-1) **/
         this->tf_odo_sensor_sensor_1.setIdentity();
     }
 
     /** ORB_SLAM2 **/
-    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model);
+    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model, flag_insert_new_keyframe);
 
     /** Set insert frame to true **/
     this->flag_process_frame = true;
@@ -457,60 +500,103 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
 
     /** Write in the slam information port **/
-    this->info.time = timestamp;
     this->info.number_relocalizations = this->slam->mpTracker->number_relocalizations;
     this->info.number_loops = this->slam->mpLoopCloser->number_loops;
-    this->info.images_computing_counts = this->computing_counts;
-    this->info.fps = (1.0/_left_frame_period.value())/this->computing_counts;
-    _task_info_out.write(this->info);
+
+    /** Port out task info in case odometry is not connected **/
+    if (!_delta_pose_samples.connected())
+    {
+        this->info.time = timestamp;
+        _task_info_out.write(this->info);
+    }
 }
 
-void Task::needFrame (const ::base::samples::RigidBodyState &delta_pose_samples)
+void Task::updateFrameFrequency (const ::base::samples::RigidBodyState &delta_pose_samples)
 {
     #ifdef DEBUG_PRINTS
-    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
-    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
-    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] SUM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.sum() <<"\n";
+    std::cout<<"[ORB_SLAM2 UPDATE_FRAME_FREQ] COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity(0,0)<<" "<<delta_pose_samples.cov_velocity(1,1)<<" "<< delta_pose_samples.cov_velocity(2,2) <<"\n";
+    std::cout<<"[ORB_SLAM2 UPDATE_FRAME_FREQ] NORM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.norm() <<"\n";
+    std::cout<<"[ORB_SLAM2 UPDATE_FRAME_FREQ] SUM_COV_VELOCITY:\n"<<delta_pose_samples.cov_velocity.sum() <<"\n";
     #endif
-    double residual = delta_pose_samples.cov_velocity.norm();
-    unsigned short new_computing_counts;
 
-    if (residual < _velocity_residual_threshold.value())
+    double residual = delta_pose_samples.cov_velocity.norm();
+
+    if ( this->slam->mpTracker->mState == ORB_SLAM2::Tracking::OK)
     {
-        /** Smaller than threshold reduce the frequency **/
-        new_computing_counts = boost::math::iround(2.0 * _desired_period.value()/_left_frame_period.value());
-        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
-    }
-    else if (residual > 2.0 * _velocity_residual_threshold.value())
-    {
-        /** Bigger than double the threshold reduce the frequency **/
-        new_computing_counts = boost::math::iround(0.3 * _desired_period.value()/_left_frame_period.value());
-        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+        /** Compute the desired period linear function **/
+        //float eq_constant = (_left_frame_period.value() - _minimum_frame_period.value()) / (_gaussian_process_residual_boundary.value()[1] - _gaussian_process_residual_boundary.value()[0]);
+        //float desired_period = eq_constant * residual + _minimum_frame_period.value();
+
+        /** Compute the desired period quadratic function **/
+        float eq_constant = (_left_frame_period.value() - _minimum_frame_period.value()) / pow(_gaussian_process_residual_boundary.value()[1] - _gaussian_process_residual_boundary.value()[0], 2);
+        float desired_period = eq_constant * pow(residual, 2) + _minimum_frame_period.value();
+
+        /** Check when boundary is exceeded. The desired period cannot be smaller than the _left_frame_period **/
+        desired_period = std::max(static_cast<float>(_left_frame_period.value()), desired_period);
+
+        unsigned short new_computing_counts = boost::math::iround(desired_period/_left_frame_period.value());
+        std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS OK ["<<eq_constant<<"] ["<<desired_period<<"]\n";
+
+        /** Only update the computing counts in case at least one image frame has
+         * been processed or the new_computing_counts is smaller than the current **/
+        if (this->flag_process_frame)
+        {
+            /** Frame has been processed **/
+            this->flag_process_frame = false;
+            this->computing_counts = new_computing_counts;
+            //std::cout<<"[ORB_SLAM2 UPDATE_FRAME_FREQ] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
+        }
+        else if (new_computing_counts < this->computing_counts)
+        {
+            /** KeyFrame has been processed **/
+            this->computing_counts = new_computing_counts;
+            //std::cout<<"[ORB_SLAM2 UPDATE_FRAME_FREQ] COUNTING COUNTS CHANGED, BECAUSE SMALLER!!\n";
+        }
+
+        this->info.desired_fps = 1.0/desired_period;
     }
     else
     {
-        new_computing_counts = boost::math::iround(_desired_period.value()/_left_frame_period.value());
-        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] NEW COUNTING COUNTS:\n"<<new_computing_counts <<"\n";
+        std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS NOT OK\n";
+        this->computing_counts = 1;
+        this->info.desired_fps = _left_frame_period.value();
     }
 
-    if (this->flag_process_frame)
+    this->info.frame_gp_residual = residual;
+    this->info.images_computing_counts = this->computing_counts;
+    this->info.actual_fps = (1.0/_left_frame_period.value())/this->computing_counts;
+
+    return;
+}
+
+bool Task::needKeyFrame (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual)
+{
+    bool flag_keyframe = false;
+    double velocity = delta_transformation.translation().norm() / delta_time.toSeconds();
+    double threshold = velocity * _error_residual_threshold.value();
+
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_TIME: "<< delta_time.toSeconds() <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] VELOCITY: "<< velocity <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] GP_THRESHOLD: "<< threshold <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] GP_RESIDUAL: "<< keyframe_residual <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_POSE_IDX: "<< this->delta_pose_idx <<"\n";
+
+    /** In case the residual and velocity are bigger than a minimum and than the threshold **/
+    if ((keyframe_residual >= threshold) &&
+        (velocity > _gaussian_process_residual_boundary.value()[0]) &&
+        (keyframe_residual > _gaussian_process_residual_boundary.value()[0]))
     {
-        /** Frame has been processed **/
-        this->flag_process_frame = false;
-        this->computing_counts = new_computing_counts;
-        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, KEYFRAME PROCESSED!!\n";
-    }
-    else if (new_computing_counts < this->computing_counts)
-    {
-        /** KeyFrame has been processed **/
-        this->computing_counts = new_computing_counts;
-        //std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] COUNTING COUNTS CHANGED, BECAUSE SMALLER!!\n";
+        flag_keyframe = true;
     }
 
     /** Store the new residual in the task info **/
-    this->info.gp_residual = residual;
+    this->info.kf_gp_residual = keyframe_residual;
+    this->info.kf_gp_threshold = threshold;
 
-    return;
+    keyframe_residual = 0.00;
+    this->delta_pose_idx = 0;
+
+    return flag_keyframe;
 }
 
 void Task::getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::vector< ::base::Waypoint > &frames_trajectory, const Eigen::Affine3d &tf)

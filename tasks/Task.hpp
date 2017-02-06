@@ -86,8 +86,14 @@ namespace orb_slam2
         //integer to control the period
         unsigned short computing_counts, left_computing_idx, right_computing_idx;
 
+        unsigned short delta_pose_idx;
+
         // incremental stereo pair index
         int frame_idx; 
+
+        base::Time delta_frame_time;
+
+        double delta_residual;
 
         frame_helper::FrameHelper frameHelperLeft, frameHelperRight; /** Frame helper **/
 
@@ -215,9 +221,13 @@ namespace orb_slam2
                 const base::samples::frame::Frame &frame_right,
                 const base::Time &timestamp);
 
-        /** @brief Calculates whether the computation of a frame is required
+        /** @brief Updates the current frame frequency to process
          */
-        void needFrame (const ::base::samples::RigidBodyState &delta_pose_samples);
+        void updateFrameFrequency (const ::base::samples::RigidBodyState &delta_pose_samples);
+
+        /** @brief Calculates whether the computation of a key frame is required
+         */
+        bool needKeyFrame (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual);
 
         /** @brief Get the Frames Pose wrt to the origin
          */
