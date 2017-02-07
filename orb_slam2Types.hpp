@@ -29,6 +29,8 @@ namespace orb_slam2
         int images_computing_counts;
         float desired_fps;
         float actual_fps;
+        float inliers_matches_ratio;
+        float map_matches_ratio;
         double frame_gp_residual;
         double kf_gp_residual;
         double kf_gp_threshold;

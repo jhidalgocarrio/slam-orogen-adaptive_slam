@@ -290,6 +290,8 @@ bool Task::configureHook()
     this->info.desired_fps = this->info.actual_fps = (1.0/_left_frame_period.value());
     this->info.frame_gp_residual = this->info.kf_gp_residual = 0.00;
     this->info.kf_gp_threshold = 0.00;
+    this->info.inliers_matches_ratio = _inliers_matches_ratio_boundary.value()[1];
+    this->info.map_matches_ratio = _map_matches_ratio_boundary.value()[1];
 
     return true;
 }
@@ -365,7 +367,6 @@ void Task::process(const base::samples::frame::Frame &frame_left,
 
     /** Check whether there is delta pose in camera frame from motion model **/
     cv::Mat tf_motion_model;
-    bool flag_insert_new_keyframe = false;
     if (base::isnotnan(this->tf_odo_sensor_sensor_1.matrix()))
     {
         //std::cout<<"[ORB_SLAM2 PROCESS] TF_ODO_SENSOR_SENSOR_1:\n"<< this->tf_odo_sensor_sensor_1.matrix() <<"\n";
@@ -374,16 +375,17 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         tf_motion_model = ORB_SLAM2::Converter::toCvMat(this->tf_odo_sensor_sensor_1.matrix());
 
         this->delta_residual = this->delta_residual / this->delta_pose_idx;
-
-        flag_insert_new_keyframe = this->needKeyFrame(this->tf_odo_sensor_sensor_1, this->delta_frame_time, this->delta_residual);
-        std::cout<<"[ORB_SLAM2 PROCESS] flag_insert_new_keyframe: "<< flag_insert_new_keyframe <<"\n";
+        if (_minimum_frame_period.value() != _left_frame_period.value())
+        {
+            this->keyFrameRatio(this->tf_odo_sensor_sensor_1, this->delta_frame_time, this->delta_residual, this->info.inliers_matches_ratio, this->info.map_matches_ratio);
+        }
 
         /** Reset the Tsensor(k)_sensor(k-1) **/
         this->tf_odo_sensor_sensor_1.setIdentity();
     }
 
     /** ORB_SLAM2 **/
-    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model, flag_insert_new_keyframe);
+    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model, this->info.inliers_matches_ratio, this->info.map_matches_ratio);
 
     /** Set insert frame to true **/
     this->flag_process_frame = true;
@@ -569,9 +571,8 @@ void Task::updateFrameFrequency (const ::base::samples::RigidBodyState &delta_po
     return;
 }
 
-bool Task::needKeyFrame (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual)
+void Task::keyFrameRatio (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual, float &inliers_matches_ratio, float &map_matches_ratio)
 {
-    bool flag_keyframe = false;
     double velocity = delta_transformation.translation().norm() / delta_time.toSeconds();
     double threshold = velocity * _error_residual_threshold.value();
 
@@ -581,13 +582,21 @@ bool Task::needKeyFrame (const Eigen::Affine3d &delta_transformation, const base
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] GP_RESIDUAL: "<< keyframe_residual <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_POSE_IDX: "<< this->delta_pose_idx <<"\n";
 
-    /** In case the residual and velocity are bigger than a minimum and than the threshold **/
-    if ((keyframe_residual >= threshold) &&
-        (velocity > _gaussian_process_residual_boundary.value()[0]) &&
-        (keyframe_residual > _gaussian_process_residual_boundary.value()[0]))
-    {
-        flag_keyframe = true;
-    }
+    /** Compute the desired ratio quadratic function **/
+    float eq_constant_inliers = (_inliers_matches_ratio_boundary.value()[1] - _inliers_matches_ratio_boundary.value()[0]) / pow(_gaussian_process_residual_boundary.value()[1] - _gaussian_process_residual_boundary.value()[0], 2);
+    inliers_matches_ratio = eq_constant_inliers * pow(keyframe_residual, 2) + _inliers_matches_ratio_boundary.value()[0];
+
+    /** Check when boundary is exceeded. The desired ratio cannot be bigger than the boundary **/
+    inliers_matches_ratio = std::min(static_cast<float>(_inliers_matches_ratio_boundary.value()[1]), inliers_matches_ratio);
+    std::cout<<"[ORB_SLAM NEED_KEYFRAME] INLIERS EQ\t["<< inliers_matches_ratio<< "] = "<<eq_constant_inliers<<" x^2 + "<<_inliers_matches_ratio_boundary.value()[0]<<"\n";
+
+    /** Compute the desired ratio quadratic function **/
+    float eq_constant_map = (_map_matches_ratio_boundary.value()[1] - _map_matches_ratio_boundary.value()[0]) / pow(_gaussian_process_residual_boundary.value()[1] - _gaussian_process_residual_boundary.value()[0], 2);
+    map_matches_ratio = eq_constant_map * pow(keyframe_residual, 2) + _map_matches_ratio_boundary.value()[0];
+
+    /** Check when boundary is exceeded. The desired ratio cannot be bigger than the boundary **/
+    map_matches_ratio = std::min(static_cast<float>(_map_matches_ratio_boundary.value()[1]), map_matches_ratio);
+    std::cout<<"[ORB_SLAM NEED_KEYFRAME] MAP EQ\t["<< map_matches_ratio<< "] = "<<eq_constant_map<<" x^2 + "<<_map_matches_ratio_boundary.value()[0]<<"\n";
 
     /** Store the new residual in the task info **/
     this->info.kf_gp_residual = keyframe_residual;
@@ -596,7 +605,7 @@ bool Task::needKeyFrame (const Eigen::Affine3d &delta_transformation, const base
     keyframe_residual = 0.00;
     this->delta_pose_idx = 0;
 
-    return flag_keyframe;
+    return;
 }
 
 void Task::getFramesPose( std::vector< ::base::Waypoint > &kf_trajectory, std::vector< ::base::Waypoint > &frames_trajectory, const Eigen::Affine3d &tf)

@@ -227,7 +227,7 @@ namespace orb_slam2
 
         /** @brief Calculates whether the computation of a key frame is required
          */
-        bool needKeyFrame (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual);
+        void keyFrameRatio (const Eigen::Affine3d &delta_transformation, const base::Time &delta_time, double &keyframe_residual, float &inliers_matches_ratio, float &map_matches_ratio);
 
         /** @brief Get the Frames Pose wrt to the origin
          */

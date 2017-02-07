@@ -61,6 +61,12 @@ task_context "Task" do
     property("gaussian_process_residual_boundary", "base::Vector2d").
         doc "Minimum (vector[0]) and Maximum (vector[1]) expected GP residual."
 
+    property("inliers_matches_ratio_boundary", "base::Vector2d").
+        doc "Minimum (vector[0]) and Maximum (vector[1]) for inliers matches ratio of the adaptive keyframe criteria (normally 0.30 - 0.75)."
+
+    property("map_matches_ratio_boundary", "base::Vector2d").
+        doc "Minimum (vector[0]) and Maximum (vector[1]) for map/vo matches ratio of the adaptive keyframe criteria (normally 0.1 - 0.35)."
+
     property('error_residual_threshold', 'double').
         doc 'Unit error (0 - 1) for odometry velocity estimation [m/s].'
 
