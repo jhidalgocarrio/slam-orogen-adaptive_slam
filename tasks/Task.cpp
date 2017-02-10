@@ -237,6 +237,11 @@ bool Task::configureHook()
     /** Relative Frame to port out the SLAM pose samples **/
     this->slam_pose_out.targetFrame = _world_frame.value();
 
+    /** Optimized Output delta pose port **/
+    this->slam_delta_pose_out.invalidate();
+    this->slam_delta_pose_out.sourceFrame = _pose_samples_out_source_frame.value();
+    this->slam_delta_pose_out.targetFrame = std::string(_pose_samples_out_source_frame.value() + "_k-1");
+
     RTT::log(RTT::Warning)<<"[ORB_SLAM2 TASK] DESIRED TARGET FRAME IS: "<<this->slam_pose_out.targetFrame<<RTT::endlog();
 
     /** Last keyframe Output port **/
@@ -445,19 +450,32 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     this->tf_world_sensor_0 = Eigen::Affine3d(tf_world_nav * tf_body_sensor);
     Eigen::Affine3d tf_world_body = this->tf_world_sensor_0 * this->tf_nav_orb_sensor * tf_body_sensor.inverse();
 
+    if (_output_debug.get())
+    {
+        /** Delta pose from slam **/
+        this->slam_delta_pose_out.time = timestamp;
+        this->slam_delta_pose_out.setTransform(this->slam_pose_out.getTransform().inverse() * tf_world_body);
+        this->slam_delta_pose_out.velocity = this->slam_delta_pose_out.position / this->delta_frame_time.toSeconds();
+        _delta_pose_samples_out.write(this->slam_delta_pose_out);
+        std::cout<<"DELTA_TIME BETWEEN FRAMES: "<< this->delta_frame_time.toSeconds()<<"\n";
+    }
+
     /** Out port the last slam pose **/
     this->slam_pose_out.time = timestamp;
     this->slam_pose_out.setTransform(tf_world_body);
     _pose_samples_out.write(this->slam_pose_out);
 
-    /** Get the trajectory of key frames **/
-    this->getFramesPose(this->keyframes_trajectory, this->allframes_trajectory, this->tf_world_sensor_0);
-    _keyframes_trajectory_out.write(this->keyframes_trajectory);
-    _allframes_trajectory_out.write(this->allframes_trajectory);
+    if (_output_debug.get())
+    {
+        /** Get the trajectory of key frames **/
+        this->getFramesPose(this->keyframes_trajectory, this->allframes_trajectory, this->tf_world_sensor_0);
+        _keyframes_trajectory_out.write(this->keyframes_trajectory);
+        _allframes_trajectory_out.write(this->allframes_trajectory);
 
-    /** Out port the last keyframe pose **/
-    this->keyframe_pose_out.time = timestamp;
-    _keyframe_pose_samples_out.write(this->keyframe_pose_out);
+        /** Out port the last keyframe pose **/
+        this->keyframe_pose_out.time = timestamp;
+        _keyframe_pose_samples_out.write(this->keyframe_pose_out);
+    }
 
     /** Get the features map **/
     //this->getMapPointsPose(this->features_map, Eigen::Affine3d(tf_world_nav * tf_body_sensor));
@@ -537,7 +555,7 @@ void Task::updateFrameFrequency (const ::base::samples::RigidBodyState &delta_po
         desired_period = std::max(static_cast<float>(_left_frame_period.value()), desired_period);
 
         unsigned short new_computing_counts = boost::math::iround(desired_period/_left_frame_period.value());
-        std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS OK ["<<eq_constant<<"] ["<<desired_period<<"]\n";
+        //std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS OK ["<<eq_constant<<"] ["<<desired_period<<"]\n";
 
         /** Only update the computing counts in case at least one image frame has
          * been processed or the new_computing_counts is smaller than the current **/
@@ -559,7 +577,7 @@ void Task::updateFrameFrequency (const ::base::samples::RigidBodyState &delta_po
     }
     else
     {
-        std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS NOT OK\n";
+        //std::cout<<"[ORB_SLAM UPDATE_FRAME_FREQ] TRACKING IS NOT OK\n";
         this->computing_counts = 1;
         this->info.desired_fps = _left_frame_period.value();
     }
@@ -576,11 +594,11 @@ void Task::keyFrameRatio (const Eigen::Affine3d &delta_transformation, const bas
     double velocity = delta_transformation.translation().norm() / delta_time.toSeconds();
     double threshold = velocity * _error_residual_threshold.value();
 
-    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_TIME: "<< delta_time.toSeconds() <<"\n";
+    /*std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_TIME: "<< delta_time.toSeconds() <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] VELOCITY: "<< velocity <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] GP_THRESHOLD: "<< threshold <<"\n";
     std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] GP_RESIDUAL: "<< keyframe_residual <<"\n";
-    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_POSE_IDX: "<< this->delta_pose_idx <<"\n";
+    std::cout<<"[ORB_SLAM2 NEED_KEYFRAME] DELTA_POSE_IDX: "<< this->delta_pose_idx <<"\n"; */
 
     /** Compute the desired ratio quadratic function **/
     float eq_constant_inliers = (_inliers_matches_ratio_boundary.value()[1] - _inliers_matches_ratio_boundary.value()[0]) / pow(_gaussian_process_residual_boundary.value()[1] - _gaussian_process_residual_boundary.value()[0], 2);

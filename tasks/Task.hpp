@@ -116,7 +116,7 @@ namespace orb_slam2
         /***************************/
         /** Output Port Variables **/
         /***************************/
-        base::samples::RigidBodyState slam_pose_out, keyframe_pose_out;
+        base::samples::RigidBodyState slam_pose_out, slam_delta_pose_out, keyframe_pose_out;
         std::vector< ::base::Waypoint > keyframes_trajectory;
         std::vector< ::base::Waypoint > allframes_trajectory;
 
