@@ -15,4 +15,5 @@
   <depend package="slam/orb_slam2" />
   <depend package="envire/orogen/envire_core" />
   <depend package="envire/orogen/envire_pcl" />
+  <tags>stable</tags>tags>
 </package>
