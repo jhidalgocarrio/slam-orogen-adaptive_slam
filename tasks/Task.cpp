@@ -295,8 +295,9 @@ bool Task::configureHook()
     this->info.desired_fps = this->info.actual_fps = (1.0/_left_frame_period.value());
     this->info.frame_gp_residual = this->info.kf_gp_residual = 0.00;
     this->info.kf_gp_threshold = 0.00;
-    this->info.inliers_matches_ratio = _inliers_matches_ratio_boundary.value()[1];
-    this->info.map_matches_ratio = _map_matches_ratio_boundary.value()[1];
+    this->info.inliers_matches_ratio_th = _inliers_matches_ratio_boundary.value()[1];
+    this->info.map_matches_ratio_th = _map_matches_ratio_boundary.value()[1];
+    this->info.distance_traversed = 0.00;
 
     return true;
 }
@@ -339,17 +340,17 @@ void Task::stopHook()
     /** Save envire_graph dot image **/
     envire::core::GraphViz viz;
     viz.write(this->envire_graph, "envire_graph_orb_slam2_graphviz.dot");
-}
-
-void Task::cleanupHook()
-{
-    TaskBase::cleanupHook();
 
     /** Save the keyframes trajectory in text format (translation + heading) **/
     this->saveKFTrajectoryText("orb_slam2_keyframes_trajectory.data");
 
     /** Save the all frames trajectory in text format (translation + heading) **/
     this->saveAllTrajectoryText("orb_slam2_allframes_trajectory.data");
+}
+
+void Task::cleanupHook()
+{
+    TaskBase::cleanupHook();
 
     /** Reset keyframe trajectory out port**/
     this->keyframes_trajectory.clear();
@@ -382,7 +383,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         this->delta_residual = this->delta_residual / this->delta_pose_idx;
         if (_minimum_frame_period.value() != _left_frame_period.value())
         {
-            this->keyFrameRatio(this->tf_odo_sensor_sensor_1, this->delta_frame_time, this->delta_residual, this->info.inliers_matches_ratio, this->info.map_matches_ratio);
+            this->keyFrameRatio(this->tf_odo_sensor_sensor_1, this->delta_frame_time, this->delta_residual, this->info.inliers_matches_ratio_th, this->info.map_matches_ratio_th);
         }
 
         /** Reset the Tsensor(k)_sensor(k-1) **/
@@ -390,7 +391,7 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     }
 
     /** ORB_SLAM2 **/
-    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model, this->info.inliers_matches_ratio, this->info.map_matches_ratio);
+    this->slam->TrackStereo(img_l, img_r, timestamp.toMilliseconds(), tf_motion_model, this->info.inliers_matches_ratio_th, this->info.map_matches_ratio_th);
 
     /** Set insert frame to true **/
     this->flag_process_frame = true;
@@ -458,6 +459,13 @@ void Task::process(const base::samples::frame::Frame &frame_left,
         this->slam_delta_pose_out.velocity = this->slam_delta_pose_out.position / this->delta_frame_time.toSeconds();
         _delta_pose_samples_out.write(this->slam_delta_pose_out);
         std::cout<<"DELTA_TIME BETWEEN FRAMES: "<< this->delta_frame_time.toSeconds()<<"\n";
+
+        /** Cumulative distance from slam pose **/
+        double distance_segment = this->slam_delta_pose_out.position.norm();
+        if (!base::isNaN<double>(distance_segment))
+        {
+            this->info.distance_traversed += distance_segment;
+        }
     }
 
     /** Out port the last slam pose **/
@@ -522,6 +530,9 @@ void Task::process(const base::samples::frame::Frame &frame_left,
     /** Write in the slam information port **/
     this->info.number_relocalizations = this->slam->mpTracker->number_relocalizations;
     this->info.number_loops = this->slam->mpLoopCloser->number_loops;
+    this->info.inliers_matches_th = this->slam->mpTracker->inliers_matches_th;
+    this->info.map_matches_ratio_cu = this->slam->mpTracker->map_matches_ratio;
+    this->info.inliers_matches_cu = this->slam->mpTracker->getMatchesInliers();
 
     /** Port out task info in case odometry is not connected **/
     if (!_delta_pose_samples.connected())
