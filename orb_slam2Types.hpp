@@ -29,11 +29,15 @@ namespace orb_slam2
         int images_computing_counts;
         float desired_fps;
         float actual_fps;
-        float inliers_matches_ratio;
-        float map_matches_ratio;
+        float inliers_matches_ratio_th; //desired threshold inliers ratio
+        float map_matches_ratio_th; //desired threshold map ratio
+        int inliers_matches_th; //actual threshold of number of inliers
+        float map_matches_ratio_cu;//current map ratio
+        int inliers_matches_cu;//current number of inliers
         double frame_gp_residual;
         double kf_gp_residual;
         double kf_gp_threshold;
+        double distance_traversed;
     };
 }
 
