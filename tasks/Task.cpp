@@ -184,7 +184,7 @@ void Task::point_cloud_samplesTransformerCallback(const base::Time &ts, const ::
     this->transformPointCloud(*keyframe_point_cloud, tf_kf_cf);
 
     /** Accumulate the cloud points **/
-    *merge_point_cloud = *keyframe_point_cloud;
+    *merge_point_cloud += *keyframe_point_cloud;
     this->keyframe_point_cloud->clear();
 }
 
