@@ -346,6 +346,8 @@ void Task::stopHook()
 
     /** Save the all frames trajectory in text format (translation + heading) **/
     this->saveAllTrajectoryText("orb_slam2_allframes_trajectory.data");
+
+    this->merge_point_cloud->clear();
 }
 
 void Task::cleanupHook()
